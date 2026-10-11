@@ -1,4 +1,4 @@
-# Preface
+# RamenRouter
 
 I built this for a very specific reason.
 
@@ -16,269 +16,177 @@ Nothing to install. Just load your DSN, let it cook, and export your SES.
 
 [Open RamenRouter](https://effishen.github.io/RamenRouter/)
 
-## Get started
+## Let's route a board
 
-1. [Open RamenRouter](https://effishen.github.io/RamenRouter/) in your desktop browser.
-2. Try the included demo, or import a **.dsn** board exported from your PCB editor.
-3. Click **Start routing** and follow the progress.
-4. Download the **.ses routing session** when the job finishes.
-5. Import that session into the PCB editor you used to export the board.
+1. Place your components and set the board rules in your PCB editor, then export a **.dsn** file.
+2. [Open RamenRouter](https://effishen.github.io/RamenRouter/) in a desktop browser and load that file. Or try the included example first.
+3. Open **Routing rules** if you want to change the routing options or give individual nets their own rules.
+4. Click **Start routing**.
+5. Download the **SES routing session** and import it back into the editor that exported your board.
 
-## Use it offline
-
-Download the [current RamenRouter folder](https://github.com/Effishen/RamenRouter/archive/refs/heads/main.zip),
-extract the whole folder, and double-click **index.html**. Keep all the supplied files
-together in that folder. No internet connection is needed for the downloaded app.
+You can also download a routed DSN, a check report and the job log.
 
 ![RamenRouter showing a routed example board](images/demo.png)
 
-## Working with your board
+## Want to use it offline?
 
-Place your components and set your board's routing rules in your PCB editor
-before exporting the .dsn file.
+Download the [current RamenRouter folder](https://github.com/effishen/RamenRouter/archive/refs/heads/main.zip), extract the whole folder, and double-click **index.html**.
 
-Use the board preview to zoom, pan and show or hide layers. The job overview
-shows progress and any connections still waiting to be routed. You can stop a
-job, adjust the settings and try again.
+Keep all the files together. Once you've downloaded the app, you don't need an internet connection.
 
-The job overview shows the current **Attempt #**, **Time left**, and the
-**Refinement** and **Finishing repairs** rounds. Remaining rounds are limits;
-the job can finish earlier. Time left is the remaining job budget, not a
-prediction of when routing will finish. The counts and timer freeze when you
-stop, so you can review how far the job got.
+## See what it's doing
 
-When the time limit is reached, the job pauses at its next safe point. Choose
-extra minutes and **Extend time** to continue the same work, including board
-preparation before any traces have been drawn. Your progress and attempt
-counts are kept. Leave this page open while paused. You can also stop and keep
-the best checked result available.
+Scroll to zoom, drag to pan, and press **F** to fit the board. **Visible layers** lets you show or hide layers. **Airwires** are guide lines for connections that still need routing; they aren't copper traces.
 
-During routing, the activity line and job log show what the engine is working
-on, including grid preparation, fanout, path searches and result checks. The
-last-update time tells you when the engine most recently reported progress.
-With **Live work** enabled, the preview highlights the pads and copper being
-examined, the grid rows being prepared, and the actual search branches and
-candidate paths being tested. Trial paths are labelled separately from routed
-tracks. The active item stays bright while recent work fades out. This applies
-to pad and via inspections, grid preparation, fanout, trace refinement and
-geometry checks as well as route searches. Highlights stay at the real
-locations being examined; paths follow the actual reported segments.
-The preview can show route paths for up to a quarter of your board's nets at
-once, with a maximum of 25 work samples. It fills as the engine reports work,
-so fewer may be visible. The display adjusts its refresh rate when drawing
-gets busy; routing continues without waiting for an animation to finish.
-Turn off **Live work** to hide these highlights. Reduced-motion settings keep
-them still.
+The job overview shows **Attempt #**, **Time left**, **Refinement** and **Finishing repairs**, including how many rounds are still available. Those are limits, so a run can finish before using them all. The time shown is the remaining job budget, rather than a prediction of when your board will be done.
 
-Already have a partly or fully routed DSN? Choose **Clear routing & start over**
-below the loaded filename. After you confirm, RamenRouter removes all traces
-and routing vias, including any fixed or protected ones. Components, pads,
-connections, copper areas and board rules stay in place, and your original file is unchanged. Copper areas are rebuilt after the traces and vias are removed.
-Review the cleared board, then click **Start routing** when you are ready.
-Download any result you want to keep before clearing it.
+The activity line and log explain what RamenRouter is working on. **Live work** highlights the pads, vias, search paths and checks happening on the board. Trial paths are shown separately from completed tracks. The preview shows a sample of the work, so you won't see every search. Turn it off if you prefer a quiet display. Reduced-motion settings keep the highlights still.
 
-Open **Routing rules** to choose how the next run should work. **Routing
-options** groups Smart search, pad escapes, refinement, time limits and other
-switches in one place. **Apply** saves your choices; **Cancel** discards edits.
+## More time, or call it a day
 
-**Prefer alternating layer directions** encourages vertical traces on the
-top layer, horizontal traces on the next layer, and alternating directions
-through the stack. The dialog shows each layer's preference. It is off by
-default and can deviate where needed; single-layer boards are unaffected.
-Nets marked **Prefer shorter routes** keep their length priority. If routing
-finishes with connections missing, RamenRouter offers to turn the direction
-preference off and retry. It changes the setting only when you choose to.
+When the time limit runs out, the job pauses at the next safe point. Choose extra minutes and **Extend time** to carry on from there. This also works if it was still preparing the board and hadn't drawn any traces yet. Keep the page open while it's paused.
 
-Want a particular net to stay on one side of the board? In **Routing rules**,
-open **Net rules**, find the net, and select its main routing layers.
-You can choose one layer or several. If a surface-mount pad sits on another
-layer and vias inside SMD pads are off, RamenRouter automatically tries a
-short, full-width trace to a nearby via outside the pad. From there, the route
-stays on the selected layers. This works at either end of a connection and
-for imported layer rules too, even when general fanout is turned off.
+**Stop job** keeps the best checked attempt available. Choose **View best result** to see the missing connections and placement advice, or **Keep stopped** to leave it alone. Looking at the result doesn't restart anything. The timer and counts stay where you stopped.
 
-The separate SMD-via option permits vias inside pads when enabled; it does
-not require them. With all layers selected, routing keeps its usual behavior.
-Every route still follows clearances, widths and the other routing rules.
+If the board is complete, the export button gets a gentle highlight. If something needs attention, the app points you towards the relevant advice instead.
 
-If a pad's centre is blocked, RamenRouter also looks for room to connect
-elsewhere inside that pad, keeping the requested trace width and clearance.
+## Start over with an already routed board
 
-**Reset** restores that net's layer and shorter-route choices from your
-imported file. These choices affect routing; the preview's **Visible layers**
-controls only change what you see.
+Load your partly or fully routed DSN, then choose **Clear routing & start over** below the filename.
 
-When you import another revision of a similar board, RamenRouter can offer
-**Reuse previous routing rules?** It checks that the net names and connected
-pins match, and that the layer names and order are compatible. The prompt
-shows the previous and new filenames and how many nets have different choices.
+Save any result you want to keep first. After confirmation, this removes all traces and routing vias, including fixed or protected ones. Components, pads, connections, copper areas, the board outline and board rules stay in place. Copper is rebuilt, and the original file on your computer is unchanged.
 
-Choose **Reuse previous rules** to carry over the selected main layers and
-**Prefer shorter routes** choices. The new file supplies its own layout,
-traces, vias, widths and other board rules. Choose **Use imported rules**, close
-the dialog or press Escape to keep the new file's rules instead. Routing waits
-for your choice. Reused rules are checked before they are committed; if that
-fails, the new input is kept and you can retry or use its imported rules.
+Check the cleared board, then click **Start routing** when you're ready.
 
-The latest board's net choices are remembered in this browser, including
-across page refreshes when local storage is available. If saving is blocked,
-they remain available during this page session. Only the matching information,
-filename and per-net choices are remembered; board geometry and copper are not
-stored. Nothing is uploaded, and this does not save the routed result.
+## Choose how it routes
 
-Enable **Prefer shorter routes** for nets where length matters. RamenRouter
-gives these nets earlier routing priority and favours shorter paths, even
-when that needs more vias. With **Smart search**, it can keep looking for a
-shorter result after making all connections. Completing the board and
-respecting its routing rules still come first. This is a preference, not a
-guarantee of the shortest possible path or a length-matching feature.
+Open **Routing rules → Routing options**. **Apply rules** saves your changes; **Cancel** discards them.
 
-Recognised EasyEDA layer IDs are shown as **Top Layer**, **Inner1**,
-**Inner2**, and **Bottom Layer**, with their original numbers in brackets.
-They appear from top to bottom in the layer table and layer list.
+- **Smart search** gives difficult connections more attention and tries focused repairs when only a few remain. More **Routing attempts** gives it more chances. It keeps the best checked result along the way.
+- **Ramen SMD escape** prepares extra short connections from surface-mount pads to nearby vias before routing. Connections needed to reach a net's chosen main layers are tried automatically, even with this switch off.
+- **Optimize after routing** refines the routes and tries to reduce vias.
+- **Prefer alternating layer directions** encourages vertical traces on the top layer, horizontal on the next, and alternating directions through the stack. The dialog shows the preference for each layer. It's off by default, can bend where needed, and has no effect on single-layer boards.
+- **Allow vias in SMD pads** permits holes in those pads. It doesn't require them. Leave it off and RamenRouter tries to fan out to a via outside the pad when a layer change is needed. Turn it on only if your board can be made that way.
+- **Routing attempts** and **Time limit** set the budget for the whole job.
 
-Use a column's header checkbox to check or uncheck every net shown in the
-table. With no search, this changes all nets. With a search, it changes only
-matching nets; the other nets keep their selections.
+Changing these options keeps your current result and affects the next run.
 
-Search with **\*** wildcards: **USB\*** finds names starting with USB,
-**\*CLK** finds names ending with CLK, and **\*CLK\*** finds names containing
-CLK. Searches ignore capitalisation. Plain text still finds any part of a name.
+If connections remain with alternating directions enabled, you can choose to turn that preference off and retry. If vias in SMD pads might help, you can choose **Enable and reroute** or **Keep current rules**. Neither setting changes unless you choose it. Download the current result before retrying if you want to keep it.
 
-Changing routing options alone keeps your current result and affects the next
-run. Save your result before applying per-net changes: these return the board
-to its input routing, keeping its imported traces and vias. If existing traces
-violate your layer choices, revise the selection or choose **Clear routing & start
-over**. Pads and through vias keep their physical layer spans. Some layer
-choices can leave pads hard to reach, so review any warnings, then click
-**Start routing** when ready. Your exported DSN keeps your layer selections,
-via-placement rules and shorter-route preferences for reopening in RamenRouter.
-Temporary copper areas are saved separately with **Save copper settings**.
+## Give particular nets their own rules
 
-If no legal pad escape is found, the log identifies the affected pads instead
-of retrying the same inaccessible connection on every pass. Review the pad
-spacing, via size, obstacles and selected layers before trying again.
+In **Routing rules → Net rules**, find a net and tick its main routing layers. Pick one layer or several.
 
-With **Smart search** enabled, RamenRouter checks its progress along the way
-and tries focused repairs when only a few connections remain. More **Routing
-attempts** gives it additional chances if needed. It keeps the best checked
-result throughout.
+Checking a layer means: get to it, then stay there. If a pad sits on another layer, RamenRouter tries to reach the chosen layers with a nearby via. With vias in SMD pads off, it looks for a short, full-width escape to a via outside the pad. With the option on, a via inside the pad is also allowed. This works at either end of the connection, including rules imported with your board.
 
-**Stop job** stops routing and keeps the best checked attempt. Choose **View
-best result** to see the remaining connections and placement advice, or **Keep
-stopped** to leave the job stopped. Viewing a result does not restart routing.
+All layers selected? Routing works as usual. Clearances, trace widths and the other rules still apply. Pads and through vias keep their actual layer spans; these checkboxes don't change how your board is built.
 
-Gentle highlights point to the next useful action: loading a board, starting a
-run, reviewing advice or downloading a completed routing session.
+If a pad's centre is blocked, RamenRouter also looks for a legal connection elsewhere inside it. If no escape fits, the log names the affected pads. Check their spacing, the via size, obstacles and your layer choices.
 
-If connections remain and vias in surface-mount pads could help, RamenRouter
-offers **Enable and reroute**. This changes a board rule, so use it only if
-your board can be manufactured with vias in those pads. You can also choose
-**Keep current rules** and keep your existing result.
+Tick **Prefer shorter routes** for nets where length matters. They get earlier access to space and more attention to shorter paths, even if that needs more vias. With **Smart search**, RamenRouter can keep looking for a shorter result after connecting the board. Finishing the board and following its rules still come first. This doesn't guarantee the shortest possible route or match trace lengths.
 
-Alongside the .ses session, you can download a routed .dsn, a check report and
-the job log.
+**Reset** restores a net's layer and shorter-route choices from your imported file. **Visible layers** only changes the preview.
 
-If a board has overlapping pads or routing gets stuck, **Placement advice**
-can point out areas to inspect. Choose **Show area** to find them on the board.
-Make any placement changes in your PCB editor, export a new .dsn and try again.
-Suggestions are starting points, not a promise that moving a part will finish
-the board. When an export omits component names, advice uses pad and net labels.
+Recognised EasyEDA layers are shown as **Top Layer**, **Inner1**, **Inner2** and **Bottom Layer**, from top to bottom, with their original numbers in brackets.
 
-## Use copper planes while routing
+### Change a bunch of nets at once
 
-Open **Copper fills** after loading your board. Choose **Add whole-board fill**
-to cover a layer, or **Draw a copper area** to choose the boundary yourself.
-Select the **layer** and **net** for each area, such as GND on an inner layer.
-You can add several areas and edit or delete them later.
+Use a column's header checkbox to tick or untick every net shown in the table. No filter means all nets. With a filter, only the matching nets change.
 
-These are temporary copper areas for routing in RamenRouter. They let the
-router use a plane instead of drawing a long trace for every connection.
-Your PCB editor supplies the final copper pours. Use the same net, layer,
-boundaries and connection settings in both places.
+Use **\*** as a wildcard:
 
-Choose **Solid**, **Grid · 45°**, or **Grid · 90°**. Grid fills have adjustable
-spacing and copper line width. **Direct** pad connections join pads to the
-surrounding copper; **Spokes** leave a gap and connect pads through short
-copper bridges. Adjust their gap and width, the clearance from other nets,
-and the clearance from the board edge. The net's imported clearance remains
-a minimum.
+| Search | Finds |
+| --- | --- |
+| **USB\*** | Names starting with USB |
+| **\*CLK** | Names ending with CLK |
+| **\*CLK\*** | Names containing CLK |
 
-When drawing, click to place each point around the area, then choose
-**Finish shape** or press Enter. Click the first point to close the boundary.
-**Undo point**, Backspace or a right-click removes the last point. Scroll to
-zoom while drawing. **Cancel** or Escape keeps the previous shape.
+Search ignores capitalisation. Plain text finds any part of a name.
 
-Use **Draw a cutout** to mark anywhere this area should leave clear. Each
-cutout can be redrawn or deleted. Existing board keepouts are also respected.
-Leave **Keep unconnected islands** off to remove isolated copper that has no
-connection to the selected net. Keeping an island does not make it a connected
-part of that net.
+### Keep your result before applying net rules
 
-Choose **Apply & rebuild** to build the temporary copper and check its
-connections. The preview shows the actual filled result, including
-clearances and cutouts. Its **Copper fills** checkbox changes only what you
-see. A pad on another layer still needs a legal via or pad escape to reach
-the connected plane; an isolated piece of copper does not complete a route.
+Applying per-net changes returns the board to its input routing, including its imported traces and vias. Download the current result first if you want it.
 
-**Temporary fills are not added to your exported PCB.** If your imported DSN
-has no copper fills, your exported DSN has no copper fills either. Copper
-that came with the imported DSN is kept. The SES session contains tracks and
-vias only.
+If existing traces conflict with your layer choices, change the selection or use **Clear routing & start over**. Check any warnings, then start a new run.
 
-When you export a board that uses these temporary areas, RamenRouter asks
-whether to **Save settings & export**, **Export routes only**, or cancel.
-Choose **Save settings & export** to download a separate copper settings file
-alongside your routes. You can also choose **Save copper settings** at any
-time after applying your areas.
+Exported DSN files keep your layer choices, SMD-via rule and shorter-route preferences for reopening in RamenRouter. Temporary copper settings are saved separately.
 
-Next time you load a board, RamenRouter can ask whether you want to load a
-saved settings file. Choose it from your computer, or continue without it.
-You can also open **Copper fills → Load copper settings** later. Nothing is
-applied automatically. The file is checked against the loaded board before
-its temporary copper areas are rebuilt.
+## Same board, another revision?
 
-After importing the routes into EasyEDA, use your matching copper pours,
-refill them and run the editor's connectivity and design-rule checks.
-**Routes that rely on a plane need that copper to make their connections.**
-Importing only the tracks and vias does not supply the plane itself. The
-separate settings file is for reuse in RamenRouter, rather than an EasyEDA
-copper import file.
+When you load a similar board, RamenRouter can ask **Reuse previous routing rules?** It checks that the nets, connected pins and layer names and order match.
 
-## See how a run performed
+Choose **Reuse previous rules** to bring over your main-layer and shorter-route choices. The new file still supplies its own layout, traces, vias, widths and other board rules.
 
-Open **Run report** after routing to see how long it took, when the first
-complete checked route was found, and where the processing time went. Review
-the progress graph, search effort, attempts and repairs alongside the result's
-remaining connections, rule issues, trace length and via count. Paused time
-is kept separate. Stopped runs show the measurements received before stopping,
-so you can distinguish partial measurements from a finished run.
+Your overall routing options stay as you set them.
 
-For comparisons between computers, enable **Fixed-work benchmark** in
-**Routing rules** before starting. It gives difficult fanout searches a fixed
-amount of work instead of a machine-dependent time cutoff. You can still stop
-the job or extend its time limit. Leave it off for normal routing.
+Choose **Use imported rules**, close the dialog or press Escape to keep the new file's choices. Routing waits for you to decide. If the old choices can't be applied, the new input is kept and you can try again or use its imported rules.
 
-Choose **Export benchmark** to save a report, then use **Compare benchmark**
-on another computer to open it alongside that computer's result. Add a device
-label to tell the runs apart. The exported report includes a board fingerprint
-and settings, but no board geometry or net names. Keep the same input file,
-rules, router version and Live work setting for a useful comparison.
+The latest board's net choices are remembered in this browser when local storage is available. If saving is blocked, they're available only while the page stays open. This remembers matching details, the filename and per-net choices. It doesn't save the board geometry, copper or routed result. Nothing is uploaded.
 
-The comparison explains when runs do not match. A speed comparison requires
-finished, fully checked benchmark runs with matching work and results.
-Browser and background activity can still affect the time; repeat a run when
-a result looks unusual. This measures RamenRouter's single-worker browser
-workload. It does not measure the performance of every processor core at once.
+## Let a copper plane do some of the work
 
-## Keep and review your results
+I don't want a long trace for every GND connection if a copper plane can do the job.
 
-Download anything you want to keep **before starting another run, closing the
-page or reloading it**. Results are not saved automatically.
+Open **Copper fills** after loading your board. Use **Add whole-board fill** for a whole layer, or **Draw a copper area** to plot your own boundary. Pick the net and layer, such as GND on an inner layer. Add as many areas as you need, then edit or delete them later.
 
-After importing the session into your PCB editor, review the routes, refill
-copper zones if your board uses them, and run the editor's design-rule checks.
-Some connections may still need to be finished by hand. Check the completed
-board before sending it for manufacture.
+These are temporary areas used while routing in RamenRouter. Set up matching copper pours in your PCB editor for the actual board: the same net, layer, boundaries and connection settings.
+
+### Set up the fill
+
+Choose **Solid**, **Grid · 45°** or **Grid · 90°**. For grids, set the spacing and copper line width.
+
+Choose **Direct** to connect pads straight to the surrounding copper, or **Spokes** for short copper bridges across a gap. Set the spoke gap and width, clearance from other nets, and clearance from the board edge. Your imported net clearance remains the minimum.
+
+Leave **Keep unconnected islands** off to remove isolated copper with no connection to the net. Turning it on keeps those islands; it doesn't make them connected.
+
+### Draw exactly where you want it
+
+Click to place each boundary point. Choose **Finish shape**, press Enter or click the first point to close it.
+
+**Undo point**, Backspace or right-click removes the last point. Scroll to zoom. **Cancel** or Escape leaves the previous shape in place.
+
+Use **Draw a cutout** wherever you want this area to stay clear. You can redraw or delete each cutout. Existing board keepouts are respected too.
+
+Choose **Apply & rebuild** to build the temporary fill and check its connections. The preview shows the filled result with its gaps and cutouts. The **Copper fills** checkbox only controls visibility.
+
+A pad on another layer still needs a legal via or pad escape to reach the connected plane. An isolated bit of copper won't finish a connection.
+
+### Keep copper settings separate
+
+**If your imported DSN has no copper fills, your exported DSN has none either.** Original imported copper is kept. SES contains tracks and vias only. Temporary fills you add here stay in RamenRouter.
+
+When exporting with temporary areas, choose **Save settings & export**, **Export routes only**, or cancel. The first option saves a separate copper settings file alongside your routes. You can also use **Save copper settings** after applying the areas.
+
+Next time you load a board, choose a saved settings file when prompted, or carry on without one. You can load it later through **Copper fills → Load copper settings**. Nothing is applied automatically. The file is checked against the board before rebuilding the areas.
+
+Back in EasyEDA, refill your matching copper pours and check connectivity and design rules. **A route that uses a plane needs that plane to make the connection.** Importing the tracks and vias alone won't supply it.
+
+The separate settings file is for loading back into RamenRouter. It isn't an EasyEDA copper import file.
+
+## Board won't finish?
+
+Open **Placement advice** and choose **Show area** to find the problem spot. It can point out overlapping pads and suggest changes to try in your PCB editor. If the file doesn't include component names, you'll see pad and net labels instead.
+
+Make the changes in your editor, export a new DSN and try again. Advice gives you somewhere to start; it doesn't promise that moving one part will finish the board.
+
+## See how the run went
+
+Open **Run report** after routing. See how long it took, when the first complete checked result appeared, and where the time went. The report also shows progress, attempts, repairs, remaining connections, rule issues, trace length and via count.
+
+Paused time is kept separate. If you stopped early, the report shows only the measurements received up to that point.
+
+Want to compare computers? Turn on **Fixed-work benchmark** in **Routing rules** before starting. It gives difficult fanout searches a fixed amount of work so the computers have a fairer task to compare. You can still stop or extend the run. Leave it off for everyday routing.
+
+Use **Export benchmark** to save a report, then **Compare benchmark** on another computer to compare it with that machine's run. Give each machine a device label. The report includes a board fingerprint and settings, but no board geometry or net names.
+
+Use the same board file, rules, RamenRouter version and **Live work** setting. A speed comparison needs finished, fully checked benchmark runs with matching work and results; the comparison points out mismatches.
+
+Power settings, browser versions and other things running on your computer affect the time. Repeat a run if something looks odd. This measures RamenRouter's browser routing workload, rather than every processor core at once.
+
+## Before you close the page or order the board
+
+Download anything you want to keep **before another run, a refresh or closing the page**. Results aren't saved automatically.
+
+Import the session into your PCB editor, review the routes, refill any copper pours and run the editor's checks. Some connections may need finishing by hand. Check the completed board before sending it for manufacture.
 
 [License](LICENSE)
