@@ -37,7 +37,15 @@ function createRamenGeometry(onActivity=null) {
     const dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy,t=den?Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/den)):0;
     return Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy);
   }
-  function pointOnSegment(p, a, b) { return distancePointSegment(p[0],p[1],a,b) <= EPS; }
+  function pointOnSegment(p, a, b) {
+    // A boundary hit must lie inside the segment's bounds. Reject far-away
+    // polygon edges before projecting and taking a square root; a pour can
+    // contain thousands of edges. Keep a generous rounding margin so large
+    // coordinates retain the existing distance calculation near a boundary.
+    const margin=EPS+64*Number.EPSILON*Math.max(1,Math.abs(p[0]),Math.abs(p[1]),Math.abs(a[0]),Math.abs(a[1]),Math.abs(b[0]),Math.abs(b[1]));
+    if(p[0]<Math.min(a[0],b[0])-margin||p[0]>Math.max(a[0],b[0])+margin||p[1]<Math.min(a[1],b[1])-margin||p[1]>Math.max(a[1],b[1])+margin)return false;
+    return distancePointSegment(p[0],p[1],a,b)<=EPS;
+  }
   function segmentIntersection(a, b, c, d) {
     const abC = cross(a,b,c), abD = cross(a,b,d), cdA = cross(c,d,a), cdB = cross(c,d,b);
     if (((abC > EPS && abD < -EPS) || (abC < -EPS && abD > EPS)) &&
@@ -359,6 +367,50 @@ function createRamenGeometry(onActivity=null) {
     const fillRule=(object,key)=>object.kind==='fill'?Math.max(0,...(object.item.zoneIds||[object.item.zoneId]).map(id=>zoneRules.get(id)?.[key]||0)):0;
     const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}),...(board.copperZones||[]).map(z=>z.clearance||0));
     const violations=[],widthDeviations=[],seen=new Set();
+    // A poured polygon can have thousands of edges. Check only the nearby
+    // edges when proving a circle or trace has enough clearance; keep the
+    // exact distance calculation for every possible violation.
+    const polygonChecks=new WeakMap();
+    function polygonCheck(shape){
+      if(polygonChecks.has(shape))return polygonChecks.get(shape);
+      const rings=polygonRings(shape);
+      if(rings.reduce((sum,ring)=>sum+ring.length,0)<64||rings.some(ring=>ring.length<3||ring.some(p=>!Array.isArray(p)||p.length<2||!p.every(Number.isFinite)))){polygonChecks.set(shape,null);return null;}
+      const bounds=shapeBounds(shape),span=Math.max(bounds.maxX-bounds.minX,bounds.maxY-bounds.minY,EPS*100);
+      let magnitude=1;for(const ring of rings)for(const p of ring)magnitude=Math.max(magnitude,Math.abs(p[0]),Math.abs(p[1]));
+      if(magnitude>1e9){polygonChecks.set(shape,null);return null;}
+      const count=rings.reduce((sum,ring)=>sum+ring.length,0),cell=span/Math.min(128,Math.max(16,Math.sqrt(count)));
+      const edges=rings.flatMap(ring=>ring.map((a,i)=>{const b=ring[(i+1)%ring.length];return{a,b,bounds:{minX:Math.min(a[0],b[0]),minY:Math.min(a[1],b[1]),maxX:Math.max(a[0],b[0]),maxY:Math.max(a[1],b[1])}};}));
+      const holes=(shape.holes||[]).map(ring=>({ring,bounds:shapeBounds({type:'polygon',points:ring})}));
+      const result={edges:spatialIndex(edges,cell),allEdges:edges,holes:spatialIndex(holes,cell),bounds,magnitude};polygonChecks.set(shape,result);return result;
+    }
+    function separatedPolygon(a,b,required){
+      const polygon=a.type==='polygon'?a:b.type==='polygon'?b:null,other=polygon===a?b:a;
+      if(!polygon||!['circle','capsule'].includes(other.type)||!Number.isFinite(other.r)||other.r<0||!Number.isFinite(required))return false;
+      const prepared=polygonCheck(polygon);if(!prepared)return false;
+      const box=shapeBounds(other);if(!Object.values(box).every(Number.isFinite))return false;
+      const scale=Math.max(prepared.magnitude,...Object.values(box).map(Math.abs));
+      const margin=EPS*8+256*Number.EPSILON*scale,threshold=Math.max(required,EPS)+margin;
+      const points=other.type==='circle'?[[other.cx,other.cy]]:[other.a,other.b];
+      for(const p of points){
+        if(!pointInPolygon(p[0],p[1],polygon.points))continue;
+        const holes=prepared.holes.query({minX:p[0],minY:p[1],maxX:p[0],maxY:p[1]},margin);
+        if(!holes.some(({ring})=>pointInPolygon(p[0],p[1],ring)&&!ring.some((a,i)=>pointOnSegment(p,a,ring[(i+1)%ring.length]))))return false;
+      }
+      if(other.type==='capsule'){
+        // Preserve the existing intersection arithmetic even for nearly
+        // parallel, mixed-scale edges outside the query rectangle.
+        const a=other.a,b=other.b,dx=b[0]-a[0],dy=b[1]-a[1];
+        for(const edge of prepared.allEdges){const ex=edge.b[0]-edge.a[0],ey=edge.b[1]-edge.a[1],den=dx*ey-dy*ex;
+          if(Math.abs(den)>EPS*EPS){const t=((edge.a[0]-a[0])*ey-(edge.a[1]-a[1])*ex)/den,u=((edge.a[0]-a[0])*dy-(edge.a[1]-a[1])*dx)/den;if(t>=0&&t<=1&&u>=0&&u<=1)return false;}
+        }
+      }
+      const reach=other.r+threshold;
+      for(const edge of prepared.edges.query(box,threshold)){
+        const gap=other.type==='circle'?distancePointSegment(other.cx,other.cy,edge.a,edge.b):distanceSegments(other.a,other.b,edge.a,edge.b);
+        if(gap<=reach)return false;
+      }
+      return true;
+    }
     function violation(type,key,detail){if(seen.has(key))return;seen.add(key);violations.push({type,...detail});}
     for(const net of board.nets||[])if(!Number.isFinite(net.width)||net.width<=0||!Number.isFinite(net.clearance)||net.clearance<0)violation('invalid_rule',`nrule:${net.id}`,{net:net.id,width:net.width,clearance:net.clearance});
     for(const object of objects)if((netKey(object.net)!==null&&!nets.has(netKey(object.net)))||(object.kind!=='pad'&&netKey(object.net)===null))violation('unknown_net',`n:${object.uid}`,{kind:object.kind,index:object.index,net:object.net});
@@ -366,15 +418,15 @@ function createRamenGeometry(onActivity=null) {
     for(const p of primitives)for(const q of layers.get(p.layer).query(p.bounds,maxClearance+EPS)){
       if(q.object.uid<=p.object.uid)continue;
       if(observesActivity)activityAt(activity,p,q,undefined,undefined,'Checking the space between copper');
-      const same=netKey(p.net)!==null&&netKey(p.net)===netKey(q.net),actual=distanceShapes(p.shape,q.shape);
-      if(!same){const required=Math.max(clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net))),fillRule(p.object,'clearance'),fillRule(q.object,'clearance'));if(actual+EPS<required||actual<=EPS)
+      const same=netKey(p.net)!==null&&netKey(p.net)===netKey(q.net);
+      if(!same){const required=Math.max(clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net))),fillRule(p.object,'clearance'),fillRule(q.object,'clearance'));if(separatedPolygon(p.shape,q.shape,required))continue;const actual=distanceShapes(p.shape,q.shape);if(actual+EPS<required||actual<=EPS)
         violation(actual<=EPS?'short':'clearance',`c:${p.object.uid}:${q.object.uid}:${p.layer}`,{layer:p.layer,a:{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net},b:{kind:q.object.kind,index:q.object.index,id:q.object.id,net:q.net},actual,required});
-      }else if(actual<=EPS){
+      }else{
         const via=p.object.kind==='via'?p.object:q.object.kind==='via'?q.object:null;
         const pad=p.object.kind==='pad'?p.object:q.object.kind==='pad'?q.object:null;
         if(via&&pad&&new Set(pad.item.shapes.map(s=>s.layer)).size===1){
           const def=(board.viaDefs||[]).find(d=>d.name===via.item.padstack);
-          if(!(board.viaAtSmd&&def?.attachAllowed!==false))violation('via_in_pad',`a:${via.uid}:${pad.uid}`,{via:via.index,pad:pad.id,net:via.net,layer:p.layer});
+          if(!(board.viaAtSmd&&def?.attachAllowed!==false)&&distanceShapes(p.shape,q.shape)<=EPS)violation('via_in_pad',`a:${via.uid}:${pad.uid}`,{via:via.index,pad:pad.id,net:via.net,layer:p.layer});
         }
       }
     }
