@@ -563,7 +563,7 @@
       if(!data.settings||typeof data.settings!=='object'||Array.isArray(data.settings))throw new Error('Choose a RamenRouter copper settings file.');
       if(JSON.stringify(data.settings).length>2*1024*1024)throw new Error('The copper settings file is larger than 2 MiB.');
       log('Loading saved copper settings and rebuilding their real connections.');
-      return launch('copper-zones',getSettings(job.settings),{copperSettings:data.settings});
+      return launch('copper-zones',getSettings(data.routingSettings||job.settings),{copperSettings:data.settings});
     }
     if(endpoint==='/api/copper-zones') {
       requireIdle();if(!inputText||!board||!job)throw new Error('Load a board before adding copper fills.');
@@ -575,7 +575,7 @@
       const scale=board.units.mmPerUnit,dimensional=['clearance','edgeClearance','thermalGap','spokeWidth','gridPitch','gridWidth'];
       const point=p=>{if(!Array.isArray(p)||p.length!==2||p.some(value=>!Number.isFinite(value)))throw new Error('Copper outline points must have finite X and Y values.');return[p[0]/scale,p[1]/scale];};
       const zones=data.zones.map(zone=>{if(!zone||!Array.isArray(zone.points)||zone.points.length>1000||!Array.isArray(zone.cutouts||[])||(zone.cutouts||[]).length>64)throw new Error('Choose a bounded copper outline and cutouts.');const result={...zone,points:zone.points.map(point),cutouts:(zone.cutouts||[]).map(poly=>{if(!Array.isArray(poly)||poly.length>1000)throw new Error('A copper cutout has too many points.');return poly.map(point);})};for(const key of dimensional)if(result[key]!==undefined){if(!Number.isFinite(result[key]))throw new Error('Copper fill dimensions must be finite.');result[key]/=scale;}return result;});
-      log('Updating copper fills around existing routing.');return launch('copper-zones',getSettings(job.settings),zones);
+      log('Updating copper fills around existing routing.');return launch('copper-zones',getSettings(data.routingSettings||job.settings),zones);
     }
     if(endpoint==='/api/demo')return importText(globalThis.RAMEN_DEMO_DSN,'RamenRouter-demo.dsn');
     if(endpoint==='/api/upload') {

@@ -749,7 +749,7 @@
     }
     const hasJob = Boolean(job && job.state !== 'idle');
     const active = isActive();
-    if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules'].includes(job.state) && !['clearing', 'updating_rules'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
+    if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules', 'updating_copper'].includes(job.state) && !['clearing', 'updating_rules', 'updating_copper'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
       for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
       for (const key of ['maxPasses', 'timeoutMinutes']) if (typeof job.settings[key] === 'number') $(key).value = job.settings[key];
     }
@@ -1450,7 +1450,7 @@
       try { settings = JSON.parse(await file.text()); } catch { throw new Error('Choose a valid RamenRouter copper settings JSON file.'); }
       if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Choose a RamenRouter copper settings file saved from this board.');
       if (jobId !== currentState?.job?.id) throw new Error('The board changed. Choose a settings file for the current board.');
-      await post('/api/copper-zones/import', { jobId, settings });
+      await post('/api/copper-zones/import', { jobId, settings, routingSettings: getSettings() });
       if ($('copperDialog').open) $('copperDialog').close();
       if ($('copperLoadDialog').open) $('copperLoadDialog').close();
       toast('Copper settings loaded. Rebuilding the temporary areas and checking their connections…');
@@ -1620,7 +1620,7 @@
     } catch (error) { copperError(error.message); return; }
     busy = copperApplying = true; updateControls(); $('applyCopper').textContent = 'Building copper…';
     try {
-      const result = await post('/api/copper-zones', { jobId: copperData.jobId, zones: copperDrafts });
+      const result = await post('/api/copper-zones', { jobId: copperData.jobId, zones: copperDrafts, routingSettings: getSettings() });
       if (result?.copperError || result?.job?.copperError) throw new Error(result.copperError || result.job.copperError);
       $('copperDialog').close(); focusedCopperId = null; copperData = null; copperDrafts = []; selectedCopperId = null;
       toast('Building copper fills and checking their connections…');
