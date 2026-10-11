@@ -719,7 +719,181 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       return restored;
     }
     say("Routing grid: "+nx+' × '+ny+' grid, '+layerCount+' layers, '+step.toPrecision(3)+' '+original.units.name+' step.',{phase:'routing',pass:0,board:copy(best),stats:bestStats});
+    // The candidate is opt-in until its schedule is compared with the same
+    // board and budget. Fixed-work mode uses round counts, never slice time.
+    const adaptiveSchedule=options.adaptiveSchedule===true;
+    const activeNow=typeof yieldTask?.now==='function'?()=>yieldTask.now():()=>Date.now();
+    const finishingGapLimit=Math.min(12,Math.max(6,Math.floor(initialStats.unrouted*.1)));
+    let repairState=null;
+    async function finishingSlice(stageHasMore,early=false){
+    // A nearly complete large board can still have more than six local gaps.
+    // Scale eligibility with its starting work, capped at twelve connections;
+    // the existing eighteen-round repair budget and full checks stay unchanged.
+    if(options.deepSearch!==false&&bestStats.unrouted>0&&bestStats.unrouted<=finishingGapLimit&&(!inaccessibleGroups.size||failures.size)&&!stopped()){
+      const beforeFinishing=bestStats.unrouted;
+      // Refinement can reshape escape stubs and remove unused escape vias.
+      // Rebuild the immutable prefix before the router indexes generated copper.
+      const restored=restoreRoutingPrefix(best);
+      const restoredStats=stats(restored,true);
+      const safe=restoredStats.unrouted<=bestStats.unrouted&&restoredStats.totalViolations<=bestStats.totalViolations&&restoredStats.clearanceViolations<=bestStats.clearanceViolations&&restoredStats.belowNominalWidthTraceCount<=bestStats.belowNominalWidthTraceCount;
+      if(safe&&!stopped()){
+        // The working seed may contain extra escape vias. Keep it separate from
+        // the best exportable result, which must never get worse during repair.
+        let repairBest=adaptiveSchedule&&repairState?repairState.best:restored;
+        let repairStats=adaptiveSchedule&&repairState?repairState.stats:restoredStats;
+        let repairSeed=adaptiveSchedule&&repairState?repairState.seed:restored;
+        if(scoreBetter(restoredStats,repairStats)){repairBest=restored;repairStats=restoredStats;}
+        // Keep the safest export separate from the layout used for exploration.
+        // Moving one congested branch can temporarily expose a few other gaps;
+        // restarting every round from the same best layout loses that progress.
+        const repairSignature=candidate=>{
+          const text=JSON.stringify([candidate.traces,candidate.vias]);let a=2166136261,b=2246822507;
+          for(let i=0;i<text.length;i++){const c=text.charCodeAt(i);a=Math.imul(a^c,16777619);b=Math.imul(b^c,3266489909);}
+          return text.length+':'+(a>>>0)+':'+(b>>>0);
+        };
+        const repairSeen=adaptiveSchedule&&repairState?repairState.seen:new Set([repairSignature(restored)]);
+        const state=adaptiveSchedule?(repairState||{nextRound:1,roundState:null,frontiers:[],stalled:0,history:null,rips:[]}):null;
+        if(state)repairState=state;
+        const legalRepair=(candidate,reference)=>['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>candidate[key]<=reference[key]);
+        const gapCounts=connections=>new Map(connections.components.map(component=>[component.net,Math.max(0,component.groups.length-1)]));
+        let repairGaps=gapCounts(connectivity(repairBest));
+        const repairDisplacedNets=new Set(state?.displacedNets||[]);
+        let repairSeedEvidence=state?.seedEvidence||null;
+        const describeTrial=(connections,pendingGaps,displacedNets=repairDisplacedNets)=>{
+          const gaps=gapCounts(connections);let displaced=0,unexplained=0,progress=0;
+          for(const [net,count]of gaps){const increase=count-(repairGaps.get(net)||0);if(increase>0){if(displacedNets.has(net))displaced+=increase;else unexplained+=increase;}}
+          for(const [net,count]of pendingGaps)progress+=Math.max(0,count-(gaps.get(net)||0));
+          // Wider swaps must gain a pending connection. All extra gaps must
+          // come from generated copper actually displaced by these repairs.
+          const allowance=progress>0&&!unexplained?Math.min(6,Math.max(3,displaced)):3;
+          return{allowance,progress,displaced};
+        };
+        const eligibleSeed=(candidate,measured,evidence)=>{
+          if(!legalRepair(measured,repairStats))return false;
+          if(measured.unrouted<=repairStats.unrouted+3)return true;
+          if(!evidence)return false;
+          return measured.unrouted<=repairStats.unrouted+describeTrial(connectivity(candidate),new Map(evidence.pendingGaps),new Set(evidence.displacedNets)).allowance;
+        };
+        const addFrontier=(candidate,measured,evidence=null)=>{
+          if(!state||!eligibleSeed(candidate,measured,evidence))return;
+          const signature=repairSignature(candidate);if(state.frontiers.some(seed=>seed.signature===signature))return;
+          state.frontiers.push({board:copy(candidate),stats:{...measured},signature,lastUsed:-1,evidence});
+          if(state.frontiers.length>3){
+            // Retain the earlier layout, the newest alternative and the best
+            // of the middle layouts. A smaller gap count can still be a trap.
+            const middle=state.frontiers.slice(1,-1).sort((a,b)=>a.stats.unrouted-b.stats.unrouted||b.lastUsed-a.lastUsed);
+            state.frontiers=[state.frontiers[0],middle[0],state.frontiers[state.frontiers.length-1]];
+          }
+        };
+        if(state&&!state.roundState){
+          const seedStats=stats(repairSeed,true);
+          if(!eligibleSeed(repairSeed,seedStats,repairSeedEvidence)){repairSeed=copy(repairBest);repairSeedEvidence=null;}
+        }
+        let repairFailures=new Set(connectivity(adaptiveSchedule?repairSeed:repairBest).components.filter(hasRoutableGap).map(c=>c.net));
+        addFrontier(restored,restoredStats);
+        finishing=true;congestionHistory=state?state.history:null;ripHistory.clear();
+        for(const [id,count]of state?.rips||[])ripHistory.set(id,count);
+        const sliceStarted=activeNow(),completedBefore=counters.repair.completed;
+        const roundEnd=early?9:18;
+        const sliceExpired=()=>early&&(counters.repair.completed-completedBefore>=2||!options.benchmarkMode&&activeNow()-sliceStarted>=90000);
+        const saveState=()=>{
+          if(!state)return;
+          state.best=repairBest;state.stats=repairStats;state.seed=repairSeed;state.seen=repairSeen;state.seedEvidence=repairSeedEvidence;state.displacedNets=[...repairDisplacedNets];
+          state.history=congestionHistory;state.rips=[...ripHistory];
+        };
+        const retain=async(measured)=>{
+          if(scoreBetter(measured,repairStats)){repairBest=copy(board);repairStats=measured;repairGaps=gapCounts(connectivity(board));}
+          if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(counters.attempt.current,'finishing');}
+        };
+        for(repairRound=state?state.nextRound:1;repairRound<=roundEnd&&!stopped()&&bestStats.unrouted>0&&(!inaccessibleGroups.size||repairFailures.size);repairRound++){
+          if(sliceExpired())break;
+          if(state&&!state.roundState&&state.stalled>=2){
+            const signature=repairSignature(repairSeed),alternatives=state.frontiers.filter(seed=>seed.signature!==signature&&eligibleSeed(seed.board,seed.stats,seed.evidence)).sort((a,b)=>a.lastUsed-b.lastUsed||a.stats.unrouted-b.stats.unrouted);
+            if(alternatives.length){repairSeed=copy(alternatives[0].board);repairSeedEvidence=alternatives[0].evidence;state.stalled=0;repairFailures=new Set(connectivity(repairSeed).components.filter(hasRoutableGap).map(c=>c.net));}
+          }
+          const resumed=state?.roundState?.round===repairRound?state.roundState:null;
+          const beforeRound=resumed?.beforeRound??bestStats.unrouted;
+          const activeFrontier=state?.frontiers.find(seed=>seed.signature===repairSignature(repairSeed));if(activeFrontier)activeFrontier.lastUsed=repairRound;
+          counters.repair.current=counters.repair.completed+1;counters.repair.status='running';counters.work=null;reportCounters('finishing');
+          board=copy(repairSeed);generation++;
+          if(resumed){board=copy(resumed.board);generation++;}
+          const pendingGaps=new Map(resumed?.pendingGaps||[...gapCounts(connectivity(board))].filter(([net,gaps])=>repairFailures.has(net)&&gaps>0));
+          let random=rng(0x52414D45+repairRound*7919),order=shuffled(routingNets,random);
+          if(repairRound===1&&!resumed)await sortByDensity(order);else order.sort((a,b)=>(repairFailures.has(b.id)?1:0)-(repairFailures.has(a.id)?1:0));
+          const queue=resumed?resumed.queue.slice():prioritizeShort(order).filter(n=>repairFailures.has(n.id));
+          const attempts=new Map(resumed?.attempts||[]),preflight=resumed?resumed.preflight:queue.slice();
+          let processed=resumed?.processed||0,maxWork=nets.length*(repairRound===1?2:3),preflightIndex=resumed?.preflightIndex||0;
+          let trialSeed=resumed?.trialSeed||null,trialStats=resumed?.trialStats||null,trialSignature=resumed?.trialSignature||null,trialProgress=resumed?.trialProgress??-1,trialEvidence=resumed?.trialEvidence||null,suspended=false;
+          const rememberTrial=(measured,connections=connectivity(board))=>{
+            // A fresh checked improvement can invalidate the earlier swap.
+            // Stop ranking useful candidates against that obsolete trial.
+            if(trialSeed&&!eligibleSeed(trialSeed,trialStats,trialEvidence)){trialSeed=null;trialStats=null;trialSignature=null;trialProgress=-1;trialEvidence=null;}
+            const candidate=describeTrial(connections,pendingGaps);
+            if(!legalRepair(measured,repairStats)||measured.unrouted>repairStats.unrouted+candidate.allowance||trialStats&&(candidate.progress<trialProgress||candidate.progress===trialProgress&&measured.unrouted>=trialStats.unrouted))return;
+            const signature=repairSignature(board);if(repairSeen.has(signature))return;
+            trialSeed=copy(board);trialStats=measured;trialSignature=signature;trialProgress=candidate.progress;trialEvidence={pendingGaps:[...pendingGaps],displacedNets:[...repairDisplacedNets]};
+          };
+          const suspendRound=measured=>{
+            if(!state||!sliceExpired()||stopped()||bestStats.unrouted===0)return false;
+            const checked=measured?.drcChecked?measured:stats(board,true);
+            if(!legalRepair(checked,repairStats))return false;
+            // An in-flight round can temporarily exceed the frontier gap cap
+            // while its displaced neighbours are still queued. This is working
+            // state only; it is never promoted to a retained/export checkpoint.
+            state.roundState={round:repairRound,beforeRound,board:copy(board),queue:queue.slice(),attempts:[...attempts],preflight:preflight.slice(),preflightIndex,processed,trialSeed,trialStats,trialSignature,trialProgress,trialEvidence,pendingGaps:[...pendingGaps]};
+            state.nextRound=repairRound;suspended=true;return true;
+          };
+          emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing remaining connections · repair '+repairRound+(resumed?' · continuing':'' )});
+          // Try non-destructive connections and local via moves before a
+          // broader repair changes the neighbouring routes they can preserve.
+          for(;preflightIndex<preflight.length;preflightIndex++){
+            const net=preflight[preflightIndex];if(stopped())break;
+            routeActivity={pass:counters.attempt.current,repairRound,netId:net.id,netName:net.name,stage:'local-repair'};
+            await routeNet(net,true,true,true);
+            const measured=stats(board,true);await retain(measured);rememberTrial(measured);
+            if(bestStats.unrouted===0)break;
+            if(sliceExpired()){preflightIndex++;if(suspendRound(measured))break;preflightIndex--;}
+          }
+          while(queue.length&&processed<maxWork&&!stopped()&&bestStats.unrouted>0&&!suspended){
+            const net=queue.shift(),count=(attempts.get(net.id)||0)+1;routeActivity={pass:counters.attempt.current,repairRound,netId:net.id,netName:net.name,processed,total:maxWork,attempt:count};attempts.set(net.id,count);if(count>3)continue;
+            const result=await routeNet(net,repairRound>1&&count<3,true);processed++;
+            for(const id of result.ripped){repairDisplacedNets.add(id);const n=rules.get(id);if(n&&!queue.some(x=>x.id===id))queue.push(n);}prioritizeShort(queue);
+            const connections=connectivity(board);
+            if(connections.unrouted<=repairStats.unrouted+describeTrial(connections,pendingGaps).allowance){if(detail('Checking repaired route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();const measured=stats(board,true);await retain(measured);rememberTrial(measured,connections);}
+            if(suspendRound())break;
+            if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing repair '+repairRound+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
+          }
+          if(suspended)break;
+          emit({type:'progress',phase:'checking',pass:counters.attempt.current,message:'Checking the repaired connections'});await yieldNow();
+          const measured=stats(board,true);await retain(measured);rememberTrial(measured);
+          if(trialSeed&&eligibleSeed(trialSeed,trialStats,trialEvidence)){
+            repairSeen.add(trialSignature);repairSeed=trialSeed;repairSeedEvidence=trialEvidence;addFrontier(trialSeed,trialStats,trialEvidence);
+            if(trialStats.unrouted>=repairStats.unrouted)say("Trying a checked alternative to make room · "+trialStats.unrouted+' connections remaining.',{phase:'finishing'});
+          }else{repairSeed=copy(repairBest);repairSeedEvidence=null;}
+          repairFailures=new Set(connectivity(repairSeed).components.filter(hasRoutableGap).map(c=>c.net));
+          say('Finishing repair '+repairRound+': '+measured.unrouted+' remaining; best '+bestStats.unrouted+' remaining.',{phase:'finishing',pass:counters.attempt.current,board:copy(best),stats:bestStats});
+          if(!stopped()){
+            counters.repair.completed++;reportCounters('finishing');
+            if(state){state.nextRound=repairRound+1;state.roundState=null;state.stalled=bestStats.unrouted<beforeRound?0:state.stalled+1;}
+          }
+        }
+        saveState();finishing=false;
+        if(state){congestionHistory=null;ripHistory.clear();}
+        if(early&&!stopped()&&bestStats.unrouted>0)say("Keeping the checked result. Trying another routing order before coming back to these repairs.",{phase:'routing'});
+        if(!early&&!stageHasMore())finishCounter('repair','finishing');
+        else if(!stopped()){counters.repair.status='pending';counters.work=null;reportCounters('finishing');}
+        if(!early&&bestStats.unrouted<beforeFinishing&&options.optimize!==false&&optimizer&&!stopped()){
+          counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
+          emit({type:'progress',phase:'optimizing',message:'Refining the repaired route'});
+          const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork),measured=stats(optimized,true);
+          if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
+          if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
+        }
+      }else if(!safe)say("Keeping the checked route. Restoring the fanouts didn’t pass all the rule checks.",{phase:'checking'});
+    }
+    }
     for(let stage=1;stage<=stageCount&&!stopped();stage++){
+    repairState=null;
     const stageEnd=Math.min(stage*12,passes);
     const stageHasMore=()=>stageEnd<passes&&!routingDone&&!(bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0));
     // Refinement may shorten imported stubs or remove an unused imported via.
@@ -755,7 +929,13 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         if(connectivity(board).unrouted<bestStats.unrouted){if(detail('Checking improved route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();let candidateStats=stats(board,true);if(scoreBetter(candidateStats,bestStats)){best=copy(board);bestStats=candidateStats;await checkpoint(pass);}}
         if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:"Attempt "+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
       }
-      emit({type:'progress',phase:'checking',pass,message:"Checking all clearances and connections"});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say("Attempt "+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}if(bestStats.unrouted===0){
+      emit({type:'progress',phase:'checking',pass,message:"Checking all clearances and connections"});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say("Attempt "+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}
+      if(adaptiveSchedule&&pass<stageEnd&&(!repairState||repairState.nextRound<=9)&&!stopped()){
+        counters.attempt.status='pending';counters.work=null;reportCounters('routing');
+        await finishingSlice(()=>true,true);
+        failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));
+      }
+      if(bestStats.unrouted===0){
         if(!shortNets.size||initialStats.unrouted===0){routingDone=true;break;}
         completeWithoutImprovement=wasComplete&&bestStats.preferredTraceLengthMm>=previousShortLength-EPS?completeWithoutImprovement+1:0;
         if(completeWithoutImprovement>=3){say("The selected nets didn’t get shorter in 3 complete-board attempts. Keeping the shortest checked result.",{phase:'routing'});routingDone=true;break;}
@@ -773,89 +953,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       if(scoreBetter(candidate,bestStats)){best=optimized;bestStats=candidate;await checkpoint();}
       if(!stopped()){counters.refinement.completed++;counters.refinement.status=refinementLimit>1?'pending':'done';counters.work=null;reportCounters('optimizing');}
     }
-    // A nearly complete large board can still have more than six local gaps.
-    // Scale eligibility with its starting work, capped at twelve connections;
-    // the existing eighteen-round repair budget and full checks stay unchanged.
-    const finishingGapLimit=Math.min(12,Math.max(6,Math.floor(initialStats.unrouted*.1)));
-    if(options.deepSearch!==false&&bestStats.unrouted>0&&bestStats.unrouted<=finishingGapLimit&&(!inaccessibleGroups.size||failures.size)&&!stopped()){
-      const beforeFinishing=bestStats.unrouted;
-      // Refinement can reshape escape stubs and remove unused escape vias.
-      // Rebuild the immutable prefix before the router indexes generated copper.
-      const restored=restoreRoutingPrefix(best);
-      const restoredStats=stats(restored,true);
-      const safe=restoredStats.unrouted<=bestStats.unrouted&&restoredStats.totalViolations<=bestStats.totalViolations&&restoredStats.clearanceViolations<=bestStats.clearanceViolations&&restoredStats.belowNominalWidthTraceCount<=bestStats.belowNominalWidthTraceCount;
-      if(safe&&!stopped()){
-        // The working seed may contain extra escape vias. Keep it separate from
-        // the best exportable result, which must never get worse during repair.
-        let repairBest=restored,repairStats=restoredStats,repairSeed=restored;
-        // Keep the safest export separate from the layout used for exploration.
-        // Moving one congested branch can temporarily expose a few other gaps;
-        // restarting every round from the same best layout loses that progress.
-        const repairSignature=candidate=>{
-          const text=JSON.stringify([candidate.traces,candidate.vias]);let a=2166136261,b=2246822507;
-          for(let i=0;i<text.length;i++){const c=text.charCodeAt(i);a=Math.imul(a^c,16777619);b=Math.imul(b^c,3266489909);}
-          return text.length+':'+(a>>>0)+':'+(b>>>0);
-        };
-        const repairSeen=new Set([repairSignature(restored)]);
-        const legalRepair=(candidate,reference)=>['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>candidate[key]<=reference[key]);
-        let repairFailures=new Set(connectivity(repairBest).components.filter(hasRoutableGap).map(c=>c.net));
-        finishing=true;congestionHistory=null;ripHistory.clear();
-        const retain=async(measured)=>{
-          if(scoreBetter(measured,repairStats)){repairBest=copy(board);repairStats=measured;}
-          if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(counters.attempt.current,'finishing');}
-        };
-        for(repairRound=1;repairRound<=18&&!stopped()&&bestStats.unrouted>0&&(!inaccessibleGroups.size||repairFailures.size);repairRound++){
-          counters.repair.current=counters.repair.completed+1;counters.repair.status='running';counters.work=null;reportCounters('finishing');
-          board=copy(repairSeed);generation++;
-          let random=rng(0x52414D45+repairRound*7919),order=shuffled(routingNets,random);
-          if(repairRound===1)await sortByDensity(order);else order.sort((a,b)=>(repairFailures.has(b.id)?1:0)-(repairFailures.has(a.id)?1:0));
-          const queue=prioritizeShort(order).filter(n=>repairFailures.has(n.id)),attempts=new Map();
-          let processed=0,maxWork=nets.length*(repairRound===1?2:3);
-          let trialSeed=null,trialStats=null,trialSignature=null;
-          const rememberTrial=measured=>{
-            if(!legalRepair(measured,repairStats)||measured.unrouted>repairStats.unrouted+3||trialStats&&measured.unrouted>=trialStats.unrouted)return;
-            const signature=repairSignature(board);if(repairSeen.has(signature))return;
-            trialSeed=copy(board);trialStats=measured;trialSignature=signature;
-          };
-          emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing remaining connections · repair '+repairRound});
-          // Try non-destructive connections and local via moves before a
-          // broader repair changes the neighbouring routes they can preserve.
-          for(const net of queue.slice()){
-            if(stopped())break;
-            routeActivity={pass:counters.attempt.current,repairRound,netId:net.id,netName:net.name,stage:'local-repair'};
-            await routeNet(net,true,true,true);
-            const measured=stats(board,true);await retain(measured);rememberTrial(measured);
-            if(bestStats.unrouted===0)break;
-          }
-          while(queue.length&&processed<maxWork&&!stopped()&&bestStats.unrouted>0){
-            const net=queue.shift(),count=(attempts.get(net.id)||0)+1;routeActivity={pass:counters.attempt.current,repairRound,netId:net.id,netName:net.name,processed,total:maxWork,attempt:count};attempts.set(net.id,count);if(count>3)continue;
-            const result=await routeNet(net,repairRound>1&&count<3,true);processed++;
-            for(const id of result.ripped){const n=rules.get(id);if(n&&!queue.some(x=>x.id===id))queue.push(n);}prioritizeShort(queue);
-            if(connectivity(board).unrouted<=repairStats.unrouted+3){if(detail('Checking repaired route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();const measured=stats(board,true);await retain(measured);rememberTrial(measured);}
-            if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing repair '+repairRound+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
-          }
-          emit({type:'progress',phase:'checking',pass:counters.attempt.current,message:'Checking the repaired connections'});await yieldNow();
-          const measured=stats(board,true);await retain(measured);rememberTrial(measured);
-          if(trialSeed&&legalRepair(trialStats,repairStats)&&trialStats.unrouted<=repairStats.unrouted+3){
-            repairSeen.add(trialSignature);repairSeed=trialSeed;
-            if(trialStats.unrouted>=repairStats.unrouted)say("Trying a checked alternative to make room · "+trialStats.unrouted+' connections remaining.',{phase:'finishing'});
-          }else repairSeed=copy(repairBest);
-          repairFailures=new Set(connectivity(repairSeed).components.filter(hasRoutableGap).map(c=>c.net));
-          say('Finishing repair '+repairRound+': '+measured.unrouted+' remaining; best '+bestStats.unrouted+' remaining.',{phase:'finishing',pass:counters.attempt.current,board:copy(best),stats:bestStats});
-          if(!stopped()){counters.repair.completed++;reportCounters('finishing');}
-        }
-        finishing=false;
-        if(!stageHasMore())finishCounter('repair','finishing');
-        else if(!stopped()){counters.repair.status='pending';counters.work=null;reportCounters('finishing');}
-        if(bestStats.unrouted<beforeFinishing&&options.optimize!==false&&optimizer&&!stopped()){
-          counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
-          emit({type:'progress',phase:'optimizing',message:'Refining the repaired route'});
-          const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork),measured=stats(optimized,true);
-          if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
-          if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
-        }
-      }else if(!safe)say("Keeping the checked route. Restoring the fanouts didn’t pass all the rule checks.",{phase:'checking'});
-    }
+    await finishingSlice(stageHasMore);
     finishing=false;repairRound=0;congestionHistory=null;ripHistory.clear();
     if(routingDone||bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0))break;
     if(stageEnd<passes&&!stopped()){

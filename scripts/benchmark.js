@@ -5,13 +5,14 @@ function createRamenBenchmark() {
   const stages=['other','fingerprinting','reading','preparing','searching','routing','fanout','refining','checking','advising','exporting'];
   const countKeys=['searches','gridPositions','netAttempts','ripups','refinementCandidates','redundantViaChecks','fanoutCandidates','fanoutCombinations','refinementRounds'];
   const boolSettings=['fanout','fanoutOnly','optimize','deepSearch','viaInPad','preferredDirections','benchmarkMode','neckdown'];
+  const optionalBoolSettings=['adaptiveSchedule'];
   const statKeys=['unrouted','totalViolations','belowNominalWidthTraceCount','traceLengthMm','viaCount','traceCount','netCount','componentCount','layerCount'];
   const finite=(v,max=Number.MAX_SAFE_INTEGER)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=max;
   const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&(Object.getPrototypeOf(v)===Object.prototype||Object.getPrototypeOf(v)===null);
   const str=(v,max)=>typeof v==='string'&&v.length<=max&&!/[\x00-\x1f\x7f]/.test(v);
   function cleanSettings(value={}) {
     const result={};
-    for(const key of boolSettings)if(typeof value[key]==='boolean')result[key]=value[key];
+    for(const key of [...boolSettings,...optionalBoolSettings])if(typeof value[key]==='boolean')result[key]=value[key];
     for(const key of ['maxPasses','timeoutMinutes'])if(finite(value[key],1440)&&Number.isInteger(value[key]))result[key]=value[key];
     for(const key of ['gridStep','viaCost'])if(finite(value[key])&&value[key]>0)result[key]=value[key];
     if(str(value.quality,32))result.quality=value.quality;
@@ -63,6 +64,7 @@ function createRamenBenchmark() {
     if(!hex(input.boardFingerprint)||!hex(input.workloadFingerprint)||!plain(input.settings)||!plain(input.environment)||!plain(input.timing)||!plain(input.counters)||!plain(input.coverage))fail();
     const timing={};for(const key of ['activeMs','measuredThroughMs','pausedMs']){if(!finite(input.timing[key],1e12))fail();timing[key]=input.timing[key];}if(input.timing.firstCompleteMs!==null&&!finite(input.timing.firstCompleteMs,timing.activeMs))fail();timing.firstCompleteMs=input.timing.firstCompleteMs;if(timing.measuredThroughMs>timing.activeMs+.01)fail();
     const settings=cleanSettings(input.settings);for(const key of boolSettings)if(typeof input.settings[key]!=='boolean')fail();if(!['maxPasses','timeoutMinutes'].every(key=>key in input.settings)||!str(input.settings.quality,32))fail();for(const key of ['gridStep','viaCost'])if(key in input.settings&&(!finite(input.settings[key])||input.settings[key]<=0))fail();for(const key of boolSettings)if(key in input.settings&&typeof input.settings[key]!=='boolean')fail();for(const key of ['timeoutMinutes','maxPasses'])if(key in input.settings&&(!Number.isInteger(input.settings[key])||input.settings[key]<1||input.settings[key]>(key==='maxPasses'?100:1440)))fail();
+    for(const key of optionalBoolSettings)if(key in input.settings&&typeof input.settings[key]!=='boolean')fail();
     if((input.protocol==='fixed-work-v1')!==(settings.benchmarkMode===true))fail();
     const environment={workerCount:1};if(input.environment.workerCount!==1)fail();for(const key of ['browser','userAgent','platform','deviceLabel'])if(key in input.environment){if(!str(input.environment[key],key==='userAgent'?512:key==='deviceLabel'?80:160))fail();environment[key]=input.environment[key];}if(input.environment.hardwareConcurrency!==undefined&&input.environment.hardwareConcurrency!==null){if(!Number.isInteger(input.environment.hardwareConcurrency)||!finite(input.environment.hardwareConcurrency,4096))fail();environment.hardwareConcurrency=input.environment.hardwareConcurrency;}for(const key of ['animationEnabled','initialAnimationEnabled','animationChanged'])if(input.environment[key]!==undefined){if(typeof input.environment[key]!=='boolean')fail();environment[key]=input.environment[key];}
     const stats=s=>{if(s===null)return null;if(!plain(s))fail();for(const key of statKeys)if(!finite(s[key])||(key!=='traceLengthMm'&&!Number.isInteger(s[key])))fail();if(!finite(s.unrouted)||typeof s.drcChecked!=='boolean'||typeof s.widthRulesChecked!=='boolean')fail();return cleanStats(s);};
