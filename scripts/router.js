@@ -814,7 +814,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         const selectFrontiers=entries=>{
           const pool=entries.slice(),selected=[];
           const quality=(a,b)=>scoreBetter(a.stats,b.stats)?-1:scoreBetter(b.stats,a.stats)?1:b.serial-a.serial;
-          pool.sort(quality);selected.push(pool.shift());
+          // An early near-complete layout can be easier to repair than a
+          // newer low-gap trap. Keep it while it remains eligible, then use
+          // the other slots for complementary connections and route quality.
+          selected.push(pool.shift());
           const coverage={gaps:new Map(bestProfile.gaps),joined:new Map([...bestProfile.joined].map(([net,parents])=>[net,new Map(parents)]))};
           const cover=seed=>{
             for(const [net,gaps]of seed.profile.gaps)coverage.gaps.set(net,Math.min(coverage.gaps.get(net)??gaps,gaps));
@@ -835,7 +838,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           state.frontierSerial=(state.frontierSerial||0)+1;
           state.frontiers.push({board:copy(candidate),stats:{...measured},signature,lastUsed:-1,evidence,serial:state.frontierSerial,profile:frontierProfile(connectivity(candidate))});
           if(state.frontiers.length>3){
-            // Keep one low-gap seed and two complementary legal alternatives.
+            // Keep an earlier seed and two complementary legal alternatives.
             // The checked export is separate and never follows this ranking.
             state.frontiers=selectFrontiers(state.frontiers);
           }
