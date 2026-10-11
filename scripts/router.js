@@ -34,7 +34,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
     // against yesterday's copper: a new foreign track can split a plane.
     function refreshFills(board){
       if(!hasZones(board))return;
-      if(!copper?.build)throw new Error('Copper-fill routing support is not loaded.');
+      if(!copper?.build)throw new Error("Copper fills aren’t ready for routing. Reload RamenRouter and try again.");
       const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);
       if(fillSignatures.get(board)===signature)return;
       if(fillCache.has(signature)){board.copperFills=copy(fillCache.get(signature));fillCache.delete(signature);fillCache.set(signature,board.copperFills);}
@@ -90,7 +90,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
     const prioritizeShort=order=>{if(shortNets.size)order.sort((a,b)=>Number(preferShort(b))-Number(preferShort(a)));return order;};
     async function attachPadsToPlanes(prepared){
       const tracesBefore=prepared.traces.length,viasBefore=prepared.vias.length;
-      say('Preparing short pad connections to copper fills.',{phase:'fanout'});
+      say("Finding short connections from pads to copper fills.",{phase:'fanout'});
       // Unanchored islands are temporary placement candidates only. The
       // ordinary rebuild below removes any island still without an anchor.
       await copper.rebuild(prepared,{...options,keepUnanchored:true},fillProgress,stopped);
@@ -144,14 +144,14 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           prepared=trial;
           const added=G.copper({ ...prepared,pads:[],traces:trace?[trace]:[],vias:[via],copperFills:[] }).primitives;
           for(const primitive of added)indices[primitive.layer]?.insert(primitive);
-          spatial('Connecting '+net.name+' to its copper fill',{stage:'plane-access',netId:net.id,netName:net.name,padId:pad.id},()=>({kind:'via',points:layers.map(layer=>[via.x,via.y,layer]),paths:trace?[{layer:trace.layer,points:trace.points}]:[],label:'Actual short pad-to-plane connection'}),'fanout');
+          spatial('Connecting '+net.name+' to its copper fill',{stage:'plane-access',netId:net.id,netName:net.name,padId:pad.id},()=>({kind:'via',points:layers.map(layer=>[via.x,via.y,layer]),paths:trace?[{layer:trace.layer,points:trace.points}]:[],label:"Short connection from pad to copper fill"}),'fanout');
           break;
         }
       }
       await copper.rebuild(prepared,options,fillProgress,stopped);
       const signature=JSON.stringify([prepared.copperZones,prepared.traces,prepared.vias]);
       fillSignatures.set(prepared,signature);fillCache.set(signature,prepared.copperFills);while(fillCache.size>4)fillCache.delete(fillCache.keys().next().value);
-      say('Copper-fill access added '+(prepared.vias.length-viasBefore)+' vias and '+(prepared.traces.length-tracesBefore)+' short pad escapes.',{phase:'fanout'});
+      say("Connected pads to copper fills with "+(prepared.vias.length-viasBefore)+' vias and '+(prepared.traces.length-tracesBefore)+' short pad escapes.',{phase:'fanout'});
       return prepared;
     }
     // Trace length leads for selected nets. A small physical-length surcharge
@@ -167,23 +167,23 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         const prepared=await attachPadsToPlanes(copy(original));
         const candidateStats=stats(prepared);
         if(candidateStats.totalViolations<=baseTotal&&candidateStats.belowNominalWidthTraceCount<=baseWidth&&candidateStats.unrouted<=initialStats.unrouted){original=prepared;originalStats=candidateStats;}
-        else say('Keeping the imported copper: plane access did not pass the full rule check.',{phase:'checking'});
+        else say("Keeping your imported copper. The new fill connections didn’t pass all the rule checks.",{phase:'checking'});
       }catch(error){if(error.name!=='AbortError'||!stopped())throw error;}
     }
     const needsLayerAccess=original.pads.some(p=>{const net=rules.get(p.net);return net&&new Set(p.shapes.map(s=>s.layer)).size===1&&net.useLayers&&!net.useLayers.includes(p.shapes[0].layer);});
     if((options.fanout!==false||options.fanoutOnly||needsLayerAccess)&&fanout&&!stopped()){
       const accessOnly=options.fanout===false&&!options.fanoutOnly;
-      say(accessOnly?'Preparing local pad access to selected main routing layers.':'Preparing checked SMD escapes.',{phase:'fanout',stats:initialStats});
+      say(accessOnly?"Finding short fanouts to your selected routing layers.":"Finding fanouts from SMD pads and checking they fit.",{phase:'fanout',stats:initialStats});
       const prepared=await fanout.fanout(copy(original),accessOnly?{...options,layerAccessOnly:true}:options,emit,stopped),candidate=prepared.board||prepared,candidateStats=stats(candidate);
       if(candidateStats.totalViolations<=baseTotal&&candidateStats.belowNominalWidthTraceCount<=baseWidth&&candidateStats.unrouted<=initialStats.unrouted){original=candidate;originalStats=candidateStats;for(const line of prepared.log||[])log.push(line);say('Fanout added '+(prepared.addedVias||0)+' vias and '+(prepared.addedTraces||0)+' full-width escapes.',{phase:'fanout',board:copy(original),stats:candidateStats});}
-      else say('Fanout did not pass the full geometry check; keeping the imported board.',{phase:'checking'});
+      else say("The fanout didn’t pass all the checks. Keeping your imported board.",{phase:'checking'});
     }
     let best=copy(original),bestStats=originalStats;
     const checkpoint=(pass=counters.attempt.current,phase='routing')=>emit({type:'checkpoint',phase,pass,counters:counterSnapshot(),board:copy(best),stats:bestStats});
     // Only fully checked best boards become interruption-safe snapshots. Live
     // progress may contain a worse rip-up attempt and is never a checkpoint.
     await checkpoint();
-    if(options.fanoutOnly){if(!fanout)throw new Error('The offline fanout module is not loaded.');return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};}
+    if(options.fanoutOnly){if(!fanout)throw new Error("Fanout isn’t ready. Reload RamenRouter and try again.");return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};}
     // Fanout is now immutable input to the main route search. An isolated
     // group with no selected-layer copper and no allowed pad-centred via
     // cannot gain an attachment through rip-up on selected layers. Report it
@@ -201,13 +201,13 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       inaccessibleGroups.set(component.net,missing.length);
       if(component.groups.length-missing.length<=1)inaccessibleNets.add(component.net);
       const pads=missing.flatMap(group=>group.pads),label=pads.slice(0,4).join(', ')+(pads.length>4?' and '+(pads.length-4)+' more':'');
-      const action='No legal local escape was found. Choose another main layer, move nearby copper or allow vias in SMD pads.';
-      say('Cannot reach selected main layers for '+net.name+(label?' at '+label:'')+'. '+action+' Skipping repeated attempts for this unchanged attachment.',{phase:'routing',activity:{stage:'layer-access-blocked',netId:net.id,netName:net.name,padIds:pads}});
+      const action="No short fanout fits the rules here. Try another main layer, move nearby copper, or allow vias in SMD pads.";
+      say("Can’t reach the selected main layers for "+net.name+(label?' at '+label:'')+'. '+action+" Skipping more tries at this connection until something changes.",{phase:'routing',activity:{stage:'layer-access-blocked',netId:net.id,netName:net.name,padIds:pads}});
     }
     const routingNets=nets.filter(net=>!inaccessibleNets.has(net.id));
     if(nets.length&&!routingNets.length){
       finishCounter('attempt','routing');finishCounter('repair','finishing');finishCounter('refinement','optimizing');
-      say(bestStats.unrouted+' connection(s) remain; the selected layers need accessible pad escapes.',{phase:'checking',board:copy(best),stats:bestStats});
+      say(bestStats.unrouted+" connections left. These pads need a fanout that reaches a selected layer.",{phase:'checking',board:copy(best),stats:bestStats});
       return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};
     }
     const span=Math.max(original.bounds.maxX-original.bounds.minX,original.bounds.maxY-original.bounds.minY);
@@ -215,7 +215,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
     const narrowest=widths.length?Math.min(...widths):Math.max(span/900,1e-5);
     let step=Number(options.gridStep)||Math.max(narrowest/5,span/900);step=Math.max(step,span/1500,1e-5);
     const bx=original.bounds.minX,by=original.bounds.minY,nx=Math.ceil((original.bounds.maxX-bx)/step)+1,ny=Math.ceil((original.bounds.maxY-by)/step)+1,plane=nx*ny,total=plane*original.layers.length;
-    if(total>6000000)throw new Error('Board grid exceeds the browser memory limit. Use a coarser grid.');
+    if(total>6000000)throw new Error("This board’s routing grid is too large for the browser. Use a coarser grid.");
     const layerCount=original.layers.length;
     measurement?.grid({width:nx,height:ny,layers:layerCount,step,units:original.units.name,positions:total});
     const traceLayers=net=>net.useLayers||original.layers.map(l=>l.index);
@@ -384,7 +384,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       // The boundary can have thousands of vertices. Attach near the pads
       // being connected, rather than rasterising the entire plane as goals.
       let seeds=new Map(),points=fillItems.length?(group.items||[]).filter(item=>item.kind!=='fill').flatMap(item=>item.points||[]):group.points||[],layers=traceLayers(net);
-      for(const p of points){spatial('Finding route attachment · '+net.name,{stage:'route-attachment',netId:net.id,netName:net.name},()=>({kind:'check',points:[p.slice(0,3)],label:'Current route attachment'}),finishing?'finishing':'routing');const padLayer=p[2]??0,via=layers.includes(padLayer)?null:endpointVia(p,net,c,soft);
+      for(const p of points){spatial("Finding where to connect · "+net.name,{stage:'route-attachment',netId:net.id,netName:net.name},()=>({kind:'check',points:[p.slice(0,3)],label:"Connection point being checked"}),finishing?'finishing':'routing');const padLayer=p[2]??0,via=layers.includes(padLayer)?null:endpointVia(p,net,c,soft);
         const sourceLayers=layers.includes(padLayer)?[padLayer]:via?layers.filter(l=>via.layers.includes(l)):[];
         const viaCost=via?searchViaCost(net)+(soft?endpointViaPenalty(via,net,softPenalty):0):0;
         for(const l of sourceLayers){
@@ -462,8 +462,8 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       function relax(from,to,cost){if(closed[to]===tag)return;let g=gCost[from]+cost;if(visited[to]!==tag||g<gCost[to]){visited[to]=tag;gCost[to]=g;parent[to]=from;heap.push(to,g+heuristic(to));}}
       while(heap.nodes.length){let entry=heap.pop(),id=entry[0];if(evaluateGoal&&bestGoal!==null&&entry[1]>=bestGoalCost-EPS)return foundPath(bestGoal);if(closed[id]===tag)continue;closed[id]=tag;expanded++;recentNodes[recentIndex++%64]=id;
         if(targets.has(id)){if(!evaluateGoal)return foundPath(id);const fullCost=gCost[id]+(targets.get(id).cost||0)/step;if(fullCost<bestGoalCost){bestGoal=id;bestGoalCost=fullCost;}}
-        if(++visitedCount%4096===0){flush();detail((soft?'Searching repair for ':'Searching ')+net.name+' · '+visitedCount.toLocaleString('en-US')+' grid positions explored',{stage:'search',netId:net.id,netName:net.name,expanded:visitedCount,repair:soft},finishing?'finishing':'routing');await yieldNow();if(stopped())return null;}
-        if(visitedCount%256===0)spatial((soft?'Searching repair for ':'Searching ')+net.name,{stage:'search',netId:net.id,netName:net.name,expanded:visitedCount,repair:soft,searchId:tag},()=>{
+        if(++visitedCount%4096===0){flush();detail((soft?"Looking for a repair path for ":"Looking for a path for ")+net.name+' · '+visitedCount.toLocaleString('en-US')+' grid positions explored',{stage:'search',netId:net.id,netName:net.name,expanded:visitedCount,repair:soft},finishing?'finishing':'routing');await yieldNow();if(stopped())return null;}
+        if(visitedCount%256===0)spatial((soft?"Looking for a repair path for ":"Looking for a path for ")+net.name,{stage:'search',netId:net.id,netName:net.name,expanded:visitedCount,repair:soft,searchId:tag},()=>{
           const branch=[];let node=id;for(;node>=0&&branch.length<2048;node=parent[node])branch.push(xy(node));branch.reverse();
           const traces=[];let segment=null;
           for(const p of branch){
@@ -475,7 +475,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           let remaining=512;const visible=[];
           for(let i=traces.length-1;i>=0&&remaining>0;i--){const trace=traces[i],points=trace.points.slice(-remaining);if(points.length>1){visible.unshift({layer:trace.layer,points});remaining-=points.length;}}
           const truncated=node>=0||traces.reduce((sum,t)=>sum+t.points.length,0)>512;
-          return traceVisual(visible,recentNodes.map(xy),'search',truncated?'Actual search nodes and recent branch':'Actual search nodes and current branch');
+          return traceVisual(visible,recentNodes.map(xy),'search',truncated?"Grid points explored and the recent path":"Grid points explored and the current path");
         },finishing?'finishing':'routing');
         let l=Math.floor(id/plane),q=id%plane,x=q%nx,y=Math.floor(q/nx);
         for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;let xx=x+dx,yy=y+dy;if(xx<0||xx>=nx||yy<0||yy>=ny)continue;let next=idx(xx,yy,l);if(!allowed(c.base,next,net.id))continue;let occupied=!allowed(c.dyn,next,net.id);if(occupied&&!soft)continue;const near=!allowed(c.thickBase,id,net.id)||!allowed(c.thickBase,next,net.id)||(!soft&&(!allowed(c.thickDyn,id,net.id)||!allowed(c.thickDyn,next,net.id)));if(near&&!exactEdgeClear(xy(id).slice(0,2),xy(next).slice(0,2),l,net,soft))continue;let bend=0;if(!preferShort(net)&&parent[id]>=0&&Math.floor(parent[id]/plane)===l){let prev=xy(parent[id]),cur=xy(id);if(Math.abs((cur[0]-prev[0])*dy-(cur[1]-prev[1])*dx)>EPS)bend=0.035;}
@@ -519,7 +519,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         for(const item of group.items)(item.kind==='trace'?traces:vias).add((item.kind==='trace'?board.traces:board.vias)[item.index]);
       }
       if(!traces.size&&!vias.size)return false;
-      spatial('Removing detached generated copper',{stage:'repair-cleanup',traces:traces.size,vias:vias.size},()=>traceVisual([...traces],[...vias].flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'check','Detached generated copper being removed'),'finishing');
+      spatial("Removing new traces and vias that became disconnected",{stage:'repair-cleanup',traces:traces.size,vias:vias.size},()=>traceVisual([...traces],[...vias].flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'check',"Disconnected new copper being removed"),'finishing');
       board.traces=board.traces.filter(t=>!traces.has(t));board.vias=board.vias.filter(v=>!vias.has(v));generation++;
       return true;
     }
@@ -572,13 +572,13 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         const angle=direction*Math.PI/16,distance=ownNet.width*factor;
         const moved={...via,x:via.x+Math.cos(angle)*distance,y:via.y+Math.sin(angle)*distance,layers:via.layers.slice()};
         const bridges=[...usedLayers].map(layer=>({net:via.net,layer,width:ownNet.width,points:[center.slice(),[moved.x,moved.y]],fixed:false}));
-        spatial('Testing local via adjustment · '+ownNet.name,{stage:'via-relocation',netId:ownNet.id,netName:ownNet.name,candidates:tested},()=>traceVisual(bridges,moved.layers.map(layer=>[moved.x,moved.y,layer]),'candidate','Actual via position and connecting bridges'),'finishing');
+        spatial('Testing local via adjustment · '+ownNet.name,{stage:'via-relocation',netId:ownNet.id,netName:ownNet.name,candidates:tested},()=>traceVisual(bridges,moved.layers.map(layer=>[moved.x,moved.y,layer]),'candidate',"Via position and its connecting traces being tested"),'finishing');
         if(!moved.layers.every(layer=>clearShape({type:'circle',cx:moved.x,cy:moved.y,r:moved.diameter/2,layer},true))||!bridges.every(t=>clearShape({type:'capsule',a:t.points[0],b:t.points[1],r:t.width/2,layer:t.layer})))continue;
         const candidate={...proposal,traces:proposal.traces.concat(bridges),vias:proposal.vias.concat(moved)};
         detail('Checking local via adjustment · '+ownNet.name,{stage:'via-relocation-check',netId:ownNet.id,netName:ownNet.name},'checking');await yieldNow();if(stopped())return null;
         const checked=stats(candidate,true);
         if(checked.unrouted<before.unrouted&&['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>checked[key]<=before[key])&&!stopped()){
-          say('Moved a generated via locally to connect '+net.name+' while retaining '+ownNet.name+'.',{phase:'finishing'});
+          say("Moved a new via nearby to connect "+net.name+" while keeping "+ownNet.name+'.',{phase:'finishing'});
           return candidate;
         }
       }
@@ -608,7 +608,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           // The pending path stays present while neighbours reconnect using
           // hard searches only. A failed trial cannot change the working board.
           detail('Trying local reroute · '+net.name+' and '+neighbours.length+' neighbouring nets · order '+(orderIndex+1)+'/'+orders.length,{stage:'cluster-repair',netId:net.id,netName:net.name,order:orderIndex+1,total:orders.length},'finishing',true);
-          spatial('Testing local reroute · '+net.name,{stage:'cluster-repair',netId:net.id,netName:net.name,order:orderIndex+1},()=>traceVisual(copper.traces,copper.vias.flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'candidate','Actual pending route retained during neighbour repair'),'finishing');
+          spatial('Testing local reroute · '+net.name,{stage:'cluster-repair',netId:net.id,netName:net.name,order:orderIndex+1},()=>traceVisual(copper.traces,copper.vias.flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'candidate',"Proposed path kept while nearby routes are repaired"),'finishing');
           await yieldNow();if(stopped())return null;
           if(!legal(stats(board,true)))return null;
           for(const neighbour of orders[orderIndex]){
@@ -632,7 +632,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       }
     }
     function removeNet(net){board.traces=board.traces.filter((t,i)=>i<original.traces.length||t.net!==net);board.vias=board.vias.filter((v,i)=>i<original.vias.length||v.net!==net);generation++;}
-    clearSpatial('route-groups','routing');detail('Preparing connected-pad groups for routing',{stage:'route-groups'},'routing');await yieldNow();
+    clearSpatial('route-groups','routing');detail("Checking which pads are already connected",{stage:'route-groups'},'routing');await yieldNow();
     const initialConnections=connectivity(original),groupsByNet=new Map(initialConnections.components.map(c=>[c.net,c.groups]));
     const densityScores=new Map();
     async function sortByDensity(order){
@@ -643,7 +643,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       for(let i=0;i<order.length;i++){
         const net=order[i];
         if(!densityScores.has(net.id))densityScores.set(net.id,original.pads.filter(p=>p.net===net.id).reduce((sum,p)=>sum+original.pads.filter(q=>q.net!==net.id&&Math.hypot(q.x-p.x,q.y-p.y)<net.width*5).length,0));
-        if(i%8===0){detail('Prioritizing dense nets · '+(i+1)+'/'+order.length,{stage:'net-order',processed:i+1,total:order.length},finishing?'finishing':'routing');if(Date.now()-lastOrderYield>=24){await yieldNow();lastOrderYield=Date.now();}if(stopped())return;}
+        if(i%8===0){detail("Choosing which crowded nets to try first · "+(i+1)+'/'+order.length,{stage:'net-order',processed:i+1,total:order.length},finishing?'finishing':'routing');if(Date.now()-lastOrderYield>=24){await yieldNow();lastOrderYield=Date.now();}if(stopped())return;}
       }
       order.sort((a,b)=>densityScores.get(b.id)-densityScores.get(a.id));
     }
@@ -671,7 +671,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           for(const group of targetGroups)for(const [id,seed]of groupSeeds(group,net,c,true,softPenalty)){const old=softTargets.get(id);if(!old||(seed.cost||0)<(old.cost||0))softTargets.set(id,seed);}
           found=await search(groupSeeds(next.group,net,c,true,softPenalty),softTargets,net,c,true,softPenalty);
         }
-        if(!found){failed=true;continue;}let copper=convertPath(found,net);spatial('Checking route candidate · '+net.name,{stage:'route-candidate',netId:net.id,netName:net.name},()=>traceVisual(copper.traces,copper.vias.flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'candidate','Actual routed candidate · being checked'),finishing?'finishing':'routing');let blocked=blockers(copper,net),committed=false;
+        if(!found){failed=true;continue;}let copper=convertPath(found,net);spatial('Checking route candidate · '+net.name,{stage:'route-candidate',netId:net.id,netName:net.name},()=>traceVisual(copper.traces,copper.vias.flatMap(v=>v.layers.map(l=>[v.x,v.y,l])),'candidate',"Proposed path being checked"),finishing?'finishing':'routing');let blocked=blockers(copper,net),committed=false;
         if(finishing&&blocked.size&&allowLocalTransactions){
           let adjusted=await relocateBlockedVia(copper,blocked,net);
           // A cluster changes foreign attachments. Limit it to the last branch
@@ -716,7 +716,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       restored.vias=[...copy(original.vias),...restored.vias.filter(v=>!originalViaKeys.has(viaKey(v)))];
       return restored;
     }
-    say('Native router: '+nx+' × '+ny+' grid, '+layerCount+' layers, '+step.toPrecision(3)+' '+original.units.name+' step.',{phase:'routing',pass:0,board:copy(best),stats:bestStats});
+    say("Routing grid: "+nx+' × '+ny+' grid, '+layerCount+' layers, '+step.toPrecision(3)+' '+original.units.name+' step.',{phase:'routing',pass:0,board:copy(best),stats:bestStats});
     for(let stage=1;stage<=stageCount&&!stopped();stage++){
     const stageEnd=Math.min(stage*12,passes);
     const stageHasMore=()=>stageEnd<passes&&!routingDone&&!(bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0));
@@ -727,7 +727,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
     if(stage>1){
       workingBest=restoreRoutingPrefix(best);const workingStats=stats(workingBest,true);
       workingSafe=workingStats.unrouted<=bestStats.unrouted&&['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>workingStats[key]<=bestStats[key]);
-      if(!workingSafe){workingBest=original;say('Keeping the checked result; the next routing stage will start from the original copper.',{phase:'checking'});}
+      if(!workingSafe){workingBest=original;say("Keeping the checked result. The next routing stage starts from your imported copper.",{phase:'checking'});}
     }
     for(let pass=(stage-1)*12+1;pass<=stageEnd&&!stopped();pass++){
       let alternateOrder=null;
@@ -738,7 +738,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           const candidate=prioritizeShort(shuffled(routingNets,rng(0x52414D45+pass*7919+variant*104729)));
           if(!completeOrders.has(candidate.map(n=>n.id).join(','))){alternateOrder=candidate;break;}
         }
-        if(!alternateOrder){say('No new selected-net routing order to try; keeping the shortest checked result.',{phase:'routing'});routingDone=true;break;}
+        if(!alternateOrder){say("No new routing order left for the selected nets. Keeping the shortest checked result.",{phase:'routing'});routingDone=true;break;}
       }
       counters.attempt.current=pass;counters.attempt.status='running';counters.work=null;reportCounters('routing');
       const previousShortLength=bestStats.preferredTraceLengthMm,wasComplete=bestStats.unrouted===0;
@@ -747,17 +747,17 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       if(pass===1)await sortByDensity(order);else order.sort((a,b)=>(failures.has(b.id)?1:0)-(failures.has(a.id)?1:0));
       let queue=(alternateOrder||prioritizeShort(order)).filter(n=>!repairMode||failures.has(n.id)),attempts=new Map(),currentFailures=new Set(),processed=0,maxWork=nets.length*(pass===1?2:3);
       if(shortNets.size&&!repairMode)completeOrders.add(queue.map(n=>n.id).join(','));
-      routeActivity={pass,processed:0,total:maxWork};detail('Starting pass '+pass+'/'+passes+' · '+queue.length+' nets queued',{stage:'pass',queued:queue.length},'routing',true);await yieldNow();
+      routeActivity={pass,processed:0,total:maxWork};detail("Starting attempt "+pass+'/'+passes+' · '+queue.length+' nets queued',{stage:'pass',queued:queue.length},'routing',true);await yieldNow();
       while(queue.length&&processed<maxWork&&!stopped()){
         let net=queue.shift(),count=(attempts.get(net.id)||0)+1;routeActivity={pass,netId:net.id,netName:net.name,processed,total:maxWork,attempt:count};attempts.set(net.id,count);if(count>3){currentFailures.add(net.id);continue;}if(!repairMode)removeNet(net.id);let result=await routeNet(net,pass>1&&count<3,repairMode);processed++;if(result.failed)currentFailures.add(net.id);else currentFailures.delete(net.id);for(const id of result.ripped){let n=rules.get(id);if(n&&!queue.some(x=>x.id===id))queue.push(n);currentFailures.add(id);}prioritizeShort(queue);
         if(connectivity(board).unrouted<bestStats.unrouted){if(detail('Checking improved route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();let candidateStats=stats(board,true);if(scoreBetter(candidateStats,bestStats)){best=copy(board);bestStats=candidateStats;await checkpoint(pass);}}
-        if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:'Pass '+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
+        if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:"Attempt "+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
       }
-      emit({type:'progress',phase:'checking',pass,message:'Checking full clearances and connectivity'});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say('Pass '+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}if(bestStats.unrouted===0){
+      emit({type:'progress',phase:'checking',pass,message:"Checking all clearances and connections"});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say("Attempt "+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}if(bestStats.unrouted===0){
         if(!shortNets.size||initialStats.unrouted===0){routingDone=true;break;}
         completeWithoutImprovement=wasComplete&&bestStats.preferredTraceLengthMm>=previousShortLength-EPS?completeWithoutImprovement+1:0;
-        if(completeWithoutImprovement>=3){say('Selected-net lengths did not improve in 3 complete-board attempts; keeping the shortest checked result.',{phase:'routing'});routingDone=true;break;}
-        if(pass<passes&&!stopped())say('All connections are complete. Trying another routing order for shorter selected nets.',{phase:'routing'});
+        if(completeWithoutImprovement>=3){say("The selected nets didn’t get shorter in 3 complete-board attempts. Keeping the shortest checked result.",{phase:'routing'});routingDone=true;break;}
+        if(pass<passes&&!stopped())say("All connections routed. Trying another order to shorten the selected nets.",{phase:'routing'});
       }
       if(inaccessibleGroups.size&&!failures.size){routingDone=true;break;}
     }
@@ -834,7 +834,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           const measured=stats(board,true);await retain(measured);rememberTrial(measured);
           if(trialSeed&&legalRepair(trialStats,repairStats)&&trialStats.unrouted<=repairStats.unrouted+3){
             repairSeen.add(trialSignature);repairSeed=trialSeed;
-            if(trialStats.unrouted>=repairStats.unrouted)say('Trying a checked alternative layout for congestion repair · '+trialStats.unrouted+' connections remaining.',{phase:'finishing'});
+            if(trialStats.unrouted>=repairStats.unrouted)say("Trying a checked alternative to make room · "+trialStats.unrouted+' connections remaining.',{phase:'finishing'});
           }else repairSeed=copy(repairBest);
           repairFailures=new Set(connectivity(repairSeed).components.filter(hasRoutableGap).map(c=>c.net));
           say('Finishing repair '+repairRound+': '+measured.unrouted+' remaining; best '+bestStats.unrouted+' remaining.',{phase:'finishing',pass:counters.attempt.current,board:copy(best),stats:bestStats});
@@ -850,7 +850,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
           if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
           if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
         }
-      }else if(!safe)say('Keeping the checked route: escape restoration did not pass the full rule check.',{phase:'checking'});
+      }else if(!safe)say("Keeping the checked route. Restoring the fanouts didn’t pass all the rule checks.",{phase:'checking'});
     }
     finishing=false;repairRound=0;congestionHistory=null;ripHistory.clear();
     if(routingDone||bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0))break;
@@ -859,12 +859,12 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       if(inaccessibleGroups.size&&!failures.size)break;
       for(const name of ['repair','refinement'])if(counters[name].limit)counters[name].status='pending';
       counters.work=null;reportCounters('routing');
-      say('Continuing with routing attempt '+(stageEnd+1)+'/'+passes+' after checking the retained result.',{phase:'routing'});
+      say('Continuing with routing attempt '+(stageEnd+1)+'/'+passes+" after checking the result kept so far.",{phase:'routing'});
     }
     }
     finishCounter('attempt','routing');
     finishCounter('repair','finishing');finishCounter('refinement','optimizing');
-    clearSpatial('route-finished');emit({type:'progress',phase:'checking',board:copy(best),stats:bestStats,message:bestStats.unrouted+' connection(s) remaining.'});
+    clearSpatial('route-finished');emit({type:'progress',phase:'checking',board:copy(best),stats:bestStats,message:bestStats.unrouted+" connections left."});
     return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};
     }finally{finishRoute?.();}
   }

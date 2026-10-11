@@ -29,7 +29,7 @@ function createRamenAdvisor(geo) {
     const netName=id=>nets.get(key(id))?.name||String(id??'unassigned');
     const components=new Set((board.pads||[]).map(p=>p.component).filter(Boolean));
     const limitedComponentLabels=components.size===0||(components.size===1&&(board.pads||[]).length>=8);
-    const note=limitedComponentLabels?'This export does not provide distinct component labels. Use the pad, net and location to find the real part in your PCB editor; component names cannot be inferred from net names.':'';
+    const note=limitedComponentLabels?"This DSN doesn’t have separate component labels. Use the pad, net and location to find the part in your PCB editor. A net name can’t tell you which component it is.":'';
     const items=[],limit=3,round=value=>Number((value*scale).toPrecision(10));
     const minimumPadding=Math.max((board.bounds?.maxX-board.bounds?.minX)||0,(board.bounds?.maxY-board.bounds?.minY)||0,EPS*100)*.015;
     const point=p=>p.map(round),fmt=value=>Number(value.toPrecision(4)).toString();
@@ -54,7 +54,7 @@ function createRamenAdvisor(geo) {
       if(items.length>=limit)break;
       for(const b of inputIndex.query(a.bounds,EPS)) {
         if(a.layer!==b.layer||a.object.uid>=b.object.uid||key(a.net)===null||key(b.net)===null||key(a.net)===key(b.net))continue;
-        if(onActivity)activityAt(a.shape,a.layer,a.net,b,'Reviewing imported copper contact',a.object.kind==='pad'?a.object.item:null);
+        if(onActivity)activityAt(a.shape,a.layer,a.net,b,"Checking contact in your imported copper",a.object.kind==='pad'?a.object.item:null);
         const pairKey=a.object.uid+':'+b.object.uid;
         if(shortPairs.has(pairKey)||geo.distanceShapes(a.shape,b.shape)>EPS)continue;
         shortPairs.add(pairKey);
@@ -62,9 +62,9 @@ function createRamenAdvisor(geo) {
         const closest=geo.closestShapePoints(a.shape,b.shape),pad=a.object.kind==='pad'?a.object.item:b.object.kind==='pad'?b.object.item:null;
         const nearby=[a.object,b.object].filter(o=>o.kind==='pad').map(o=>component(o.item)).filter(Boolean);
         const position=closest.a,padding=Math.max((nets.get(key(a.net))?.width||0)*2,(nets.get(key(b.net))?.width||0)*2,minimumPadding);
-        items.push({id:'short:'+pairKey,kind:'existing_short',title:'Existing copper contact: '+netName(a.net)+' / '+netName(b.net),
-          detail:describe(a.object)+' touches '+describe(b.object)+' on layer '+String((board.layers||[]).find(l=>l.index===a.layer)?.name??a.layer)+'. This contact is already present in the imported board.',
-          suggestion:'Correct this contact in your PCB editor before rerouting. Review the highlighted copper and pad placement; routing alone does not move or repair imported pads.',
+        items.push({id:'short:'+pairKey,kind:'existing_short',title:"These nets already touch: "+netName(a.net)+' / '+netName(b.net),
+          detail:describe(a.object)+' touches '+describe(b.object)+' on layer '+String((board.layers||[]).find(l=>l.index===a.layer)?.name??a.layer)+". They already touch in the imported board.",
+          suggestion:"Fix this contact in your PCB editor, then reroute. Check the highlighted copper and pads. Routing can’t move or repair imported pads.",
           component:component(pad),pin:pad?String(pad.pin??pad.id):null,net:netName(a.net)+' / '+netName(b.net),nearbyComponents:[...new Set(nearby)],
           location:point(position),area:area([closest.a,closest.b],padding),evidence:{source:'input',distanceMm:0,layer:a.layer,nets:[netName(a.net),netName(b.net)],
             objects:[a.object,b.object].map(o=>({kind:o.kind,id:String(o.id),component:o.kind==='pad'?component(o.item):null,pin:o.kind==='pad'?String(o.item.pin??o.id):null,net:netName(o.net)}))}});
@@ -88,7 +88,7 @@ function createRamenAdvisor(geo) {
         if(!allowed.length)continue;
         const blockers=new Map();let tested=0,blocked=0;
         for(const shape of allowed) {
-          if(onActivity)activityAt(shape,shape.layer,net.id,null,'Reviewing pad escape space',pad);
+          if(onActivity)activityAt(shape,shape.layer,net.id,null,"Checking room for a pad fanout",pad);
           const bounds=geo.shapeBounds(shape),anchor=geo.pointInShape(pad.x,pad.y,shape)?[pad.x,pad.y]:geo.nearestPointOnShape(pad.x,pad.y,shape),cx=anchor[0],cy=anchor[1];
           const radius=Math.max(Math.hypot(bounds.minX-cx,bounds.minY-cy),Math.hypot(bounds.maxX-cx,bounds.maxY-cy));
           const reach=radius+2*net.width+(net.routingClearance??net.clearance??0);
@@ -97,9 +97,9 @@ function createRamenAdvisor(geo) {
           for(let i=0;i<16;i++) {
             const angle=i*Math.PI/8,tip=[cx+reach*Math.cos(angle),cy+reach*Math.sin(angle)];
             const escape={type:'capsule',a:[cx,cy],b:tip,r:net.width/2};let hit=false;
-            if(onActivity)activityAt(escape,shape.layer,net.id,null,'Probing a straight pad escape',pad);
+            if(onActivity)activityAt(escape,shape.layer,net.id,null,"Trying a straight pad fanout",pad);
             for(const other of near) {
-              if(onActivity)activityAt(escape,shape.layer,net.id,other,'Checking a pad escape against nearby copper',pad);
+              if(onActivity)activityAt(escape,shape.layer,net.id,other,"Checking whether a pad fanout clears nearby copper",pad);
               const required=geo.clearance(board,net,other.net),actual=geo.distanceShapes(escape,other.shape);
               if(actual>EPS&&actual+EPS>=required)continue;
               hit=true;const old=blockers.get(other.object.uid),gap=geo.distanceShapes(shape,other.shape);
@@ -126,11 +126,11 @@ function createRamenAdvisor(geo) {
       const close=blockers.slice(0,3),others=[...new Set(close.map(b=>component(b.pad)).filter(c=>c&&c!==component(pad)))];
       const nearest=blockers.reduce((a,b)=>a.gap<=b.gap?a:b),position=[pad.x,pad.y],where=point(position);
       let suggestion;
-      if(limitedComponentLabels)suggestion='Find these pads in your PCB editor and review which real parts can be spaced farther apart. The export cannot identify a component to move. Reroute after any edit to test whether it helps.';
-      else if(others.length)suggestion='Candidate placement change: review moving '+others.join(', ')+(component(pad)?' or '+component(pad):'')+' to leave more room near this pad. This has not been rerouted or verified; test any change in your PCB editor and reroute.';
-      else suggestion='The nearby blocking pads share this component label. Moving the whole component will not change its internal pad spacing; review the footprint and pad escape strategy, then reroute to test changes.';
-      items.push({id:'endpoint:'+String(pad.id),kind:'endpoint_congestion',title:'Tight escape near '+label(pad),
-        detail:net.name+' remains disconnected. Nearby pads meet '+blocked+' of '+tested+' sampled full-width straight escapes. The nearest measured pad gap is '+fmt(round(nearest.gap))+' mm. This local sample does not prove that no route exists.',
+      if(limitedComponentLabels)suggestion="Find these pads in your PCB editor and see whether their parts can be spaced farther apart. This DSN doesn’t identify a component to move. Reroute after changing the placement to see if it helps.";
+      else if(others.length)suggestion="Try making more room by moving "+others.join(', ')+(component(pad)?' or '+component(pad):'')+" to give this pad more space. This is a suggestion, not a checked fix. Make the change in your PCB editor, then reroute to see if it helps.";
+      else suggestion="These nearby blocking pads share one component label. Moving the whole part won’t change its pad spacing. Check the footprint and how the pads fan out, then reroute any changes.";
+      items.push({id:'endpoint:'+String(pad.id),kind:'endpoint_congestion',title:"Not much room to fan out near "+label(pad),
+        detail:net.name+" is still disconnected. Nearby pads block "+blocked+' of '+tested+" full-width straight fanouts tried here. The nearest measured pad gap is "+fmt(round(nearest.gap))+" mm. These local tries don’t rule out another path.",
         suggestion,component:component(pad),pin:String(pad.pin??pad.id),net:net.name,nearbyComponents:others,location:where,
         area:area([position,...close.map(b=>b.point)],Math.max(net.width*2,minimumPadding)),
         evidence:{source:'local-pad-geometry',sampledEscapes:tested,blockedEscapes:blocked,nearestPadGapMm:round(nearest.gap),traceWidthMm:round(net.width),
@@ -141,9 +141,9 @@ function createRamenAdvisor(geo) {
       const air=connectivity.airwires.find(a=>key(a.net)===key(connection.net));
       const from=air?.from||connection.groups[0]?.points[0]?.slice(0,2),to=air?.to||connection.groups[1]?.points[0]?.slice(0,2);
       if(!from||!to)continue;
-      items.push({id:'incomplete:'+String(connection.net),kind:'incomplete_net',title:'Review the remaining '+netName(connection.net)+' connection',
-        detail:'This net has '+connection.groups.length+' disconnected copper groups. The local pad check did not identify a clear component-placement candidate.',
-        suggestion:'Inspect the highlighted connection and routing space in your PCB editor. A component move is only a candidate until the edited board has been rerouted and checked.',
+      items.push({id:'incomplete:'+String(connection.net),kind:'incomplete_net',title:"Check the remaining "+netName(connection.net)+' connection',
+        detail:"This net still has "+connection.groups.length+" separate copper groups. The pad check didn’t find a clear component to move.",
+        suggestion:"Check the highlighted connection and nearby routing space in your PCB editor. If you move a component, reroute and check the edited board to see whether it helps.",
         component:null,pin:null,net:netName(connection.net),nearbyComponents:[],location:point(from),area:area([from,to],Math.max(nets.get(key(connection.net))?.width||0,minimumPadding)),evidence:{source:'connectivity',groups:connection.groups.length}});
     }
     return finish({items,limitedComponentLabels,units:'mm',note});

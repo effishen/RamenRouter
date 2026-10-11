@@ -46,7 +46,7 @@ The activity line and log explain what RamenRouter is working on. **Live work** 
 
 When the time limit runs out, the job pauses at the next safe point. Choose extra minutes and **Extend time** to carry on from there. This also works if it was still preparing the board and hadn't drawn any traces yet. Keep the page open while it's paused.
 
-**Stop job** keeps the best checked attempt available. Choose **View best result** to see the missing connections and placement advice, or **Keep stopped** to leave it alone. Looking at the result doesn't restart anything. The timer and counts stay where you stopped.
+**Stop routing** keeps the best checked attempt available. Choose **View best result** to see the missing connections and placement advice, or **Keep stopped** to leave it alone. Looking at the result doesn't restart anything. The timer and counts stay where you stopped.
 
 If the board is complete, the export button gets a gentle highlight. If something needs attention, the app points you towards the relevant advice instead.
 

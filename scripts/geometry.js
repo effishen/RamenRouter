@@ -230,9 +230,9 @@ function createRamenGeometry(onActivity=null) {
     let primitiveCount=0;
     for(const p of primitives){primitiveCount++;if(netKey(p.net)===null)continue;for(const q of layers.get(p.layer).query(p.bounds,EPS)){
       if(q.object.uid<=p.object.uid || netKey(q.net)!==netKey(p.net) || uf.find(q.object.uid)===uf.find(p.object.uid))continue;
-      if(observesActivity)activityAt(activity,p,q,primitiveCount,primitives.length,'Checking copper contact');
+      if(observesActivity)activityAt(activity,p,q,primitiveCount,primitives.length,'Checking where copper touches');
       if(distanceShapes(p.shape,q.shape)<=EPS)uf.union(p.object.uid,q.object.uid);
-    }if(observesActivity)activityAt(activity,p,null,primitiveCount,primitives.length,'Checking connected copper');}
+    }if(observesActivity)activityAt(activity,p,null,primitiveCount,primitives.length,'Checking which copper is connected');}
     const byNet=new Map();
     for(const object of objects){const key=netKey(object.net);if(key===null || !object.primitives.length)continue;
       if(!byNet.has(key))byNet.set(key,new Map());const groups=byNet.get(key),id=uf.find(object.uid);
@@ -251,7 +251,7 @@ function createRamenGeometry(onActivity=null) {
         const used=new Set([0]),best=new Array(groups.length).fill(null);
         function groupDistance(a,b){let closest={distance:Infinity,from:a.points[0]?.slice(0,2),to:b.points[0]?.slice(0,2)};
           for(const ap of a._primitives)for(const bp of b._primitives){
-            if(observesActivity)activityAt(activity,ap,bp,undefined,undefined,'Comparing disconnected copper groups');
+            if(observesActivity)activityAt(activity,ap,bp,undefined,undefined,'Checking the gap between disconnected copper');
             const dx=Math.max(0,ap.bounds.minX-bp.bounds.maxX,bp.bounds.minX-ap.bounds.maxX),dy=Math.max(0,ap.bounds.minY-bp.bounds.maxY,bp.bounds.minY-ap.bounds.maxY);
             if(Math.hypot(dx,dy)>=closest.distance)continue;
             const pair=closestShapePoints(ap.shape,bp.shape);
@@ -365,7 +365,7 @@ function createRamenGeometry(onActivity=null) {
     for(const p of primitives)if(!allowedLayers.has(p.layer))violation('unknown_layer',`l:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,layer:p.layer});
     for(const p of primitives)for(const q of layers.get(p.layer).query(p.bounds,maxClearance+EPS)){
       if(q.object.uid<=p.object.uid)continue;
-      if(observesActivity)activityAt(activity,p,q,undefined,undefined,'Checking copper clearance');
+      if(observesActivity)activityAt(activity,p,q,undefined,undefined,'Checking the space between copper');
       const same=netKey(p.net)!==null&&netKey(p.net)===netKey(q.net),actual=distanceShapes(p.shape,q.shape);
       if(!same){const required=Math.max(clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net))),fillRule(p.object,'clearance'),fillRule(q.object,'clearance'));if(actual+EPS<required||actual<=EPS)
         violation(actual<=EPS?'short':'clearance',`c:${p.object.uid}:${q.object.uid}:${p.layer}`,{layer:p.layer,a:{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net},b:{kind:q.object.kind,index:q.object.index,id:q.object.id,net:q.net},actual,required});
@@ -401,11 +401,11 @@ function createRamenGeometry(onActivity=null) {
     const edges=boundaryEdges(board);
     let outlineCount=0;
     for(const p of primitives){
-      if(observesActivity)activityAt(activity,p,null,++outlineCount,primitives.length,'Checking copper against the board outline');
+      if(observesActivity)activityAt(activity,p,null,++outlineCount,primitives.length,'Checking clearance from the board edge');
       if(!shapeInsideBoard(p.shape,board,edges,Math.max(board.edgeClearance||0,fillRule(p.object,'edgeClearance'))))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
       for(const [index,k] of (board.keepouts||[]).entries()){
         if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.object.kind!=='via')continue;
-        if(observesActivity)activityAt(activity,p,{shape:k.shape,layer:p.layer},outlineCount,primitives.length,'Checking copper against a keepout');
+        if(observesActivity)activityAt(activity,p,{shape:k.shape,layer:p.layer},outlineCount,primitives.length,'Checking clearance from a keepout');
         const required=Math.max(k.clearance??netClearance(p.net),fillRule(p.object,'clearance')),actual=distanceShapes(p.shape,k.shape);
         if(actual+EPS<required||actual<=EPS)violation('keepout',`k:${p.object.uid}:${index}:${p.layer}`,{kind:p.object.kind,index:p.object.index,keepout:index,net:p.net,layer:p.layer,actual,required});
       }

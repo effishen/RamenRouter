@@ -18,7 +18,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
     const candidatesByNet=measurement?new Map():null;
     let combinations=0;
     const fillSignatures=new WeakMap();
-    function refreshFills(board){if(!(board.copperZones||[]).length)return;if(!copper?.build)throw new Error('Copper-fill fanout support is not loaded.');const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;board.copperFills=copper.build(board,options);fillSignatures.set(board,signature);}
+    function refreshFills(board){if(!(board.copperZones||[]).length)return;if(!copper?.build)throw new Error("Copper fills aren’t ready for fanout. Reload RamenRouter and try again.");const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;board.copperFills=copper.build(board,options);fillSignatures.set(board,signature);}
     const flush=()=>{if(!measurement)return;for(const [netId,count]of candidatesByNet)measurement.count('fanoutCandidates',count,netId);candidatesByNet.clear();if(combinations){measurement.count('fanoutCombinations',combinations);combinations=0;}};
     const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
@@ -45,7 +45,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
     const padCounts=new Map(board.nets.map(n=>[n.id,board.pads.filter(p=>p.net===n.id).length]));
     const validate=()=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.validate(board);}finally{finish?.();}};
     const baseValidation=validate(),edges=G.boundaryEdges(board),primitives=G.copper(board).primitives.filter(p=>!(p.object.kind==='fill'&&p.object.item.zoneId!=null&&!p.object.item.fixed&&!p.object.item.imported));
-    if(options.viaInPad===false&&baseValidation.viaInPadViolations){const error=new Error('Existing vias overlap SMD pads while vias in SMD pads are disabled. Clear routing & start over, or enable vias in SMD pads before routing.');error.code='VIA_IN_PAD_CONFLICT';throw error;}
+    if(options.viaInPad===false&&baseValidation.viaInPadViolations){const error=new Error("This board already has vias touching SMD pads, but that option is off. Clear routing & start over, or allow vias in SMD pads.");error.code='VIA_IN_PAD_CONFLICT';throw error;}
     const span=Math.max(board.bounds.maxX-board.bounds.minX,board.bounds.maxY-board.bounds.minY),cell=Math.max(span/60,.01);
     const indices=new Map(board.layers.map(l=>[l.index,G.spatialIndex([],cell)]));
     for(const p of primitives)indices.get(p.layer)?.insert(p);
@@ -83,7 +83,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
       for(const k of board.keepouts||[]){if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.kind!=='via')continue;const distance=G.distanceShapes(p.shape,k.shape);if(distance+EPS<(k.clearance??radius)||distance<=EPS)return false;}
       return true;
     }
-    function legalBundle(bundle,temporary=[]) {const id=++visualCandidateId,netId=bundle.traces[0]?.net??bundle.vias[0]?.net;if(candidatesByNet)candidatesByNet.set(netId,(candidatesByNet.get(netId)||0)+1);spatial('Testing fanout candidate · '+(nets.get(netId)?.name||'pad escape'),{stage:'fanout-candidate',netId,netName:nets.get(netId)?.name,candidateId:id},()=>bundleVisual(bundle,'Actual fanout candidate · being checked'));let candidateBoard=null;return bundle.traces.every(t=>traceLayers(nets.get(t.net)).includes(t.layer)||G.isPermittedLayerEscape(candidateBoard||(candidateBoard={...board,vias:board.vias.concat(bundle.vias)}),t,nets.get(t.net)))&&itemPrimitives(bundle).every(p=>clearPrimitive(p,temporary));}
+    function legalBundle(bundle,temporary=[]) {const id=++visualCandidateId,netId=bundle.traces[0]?.net??bundle.vias[0]?.net;if(candidatesByNet)candidatesByNet.set(netId,(candidatesByNet.get(netId)||0)+1);spatial("Trying a fanout · "+(nets.get(netId)?.name||'pad escape'),{stage:'fanout-candidate',netId,netName:nets.get(netId)?.name,candidateId:id},()=>bundleVisual(bundle,"Proposed fanout being checked"));let candidateBoard=null;return bundle.traces.every(t=>traceLayers(nets.get(t.net)).includes(t.layer)||G.isPermittedLayerEscape(candidateBoard||(candidateBoard={...board,vias:board.vias.concat(bundle.vias)}),t,nets.get(t.net)))&&itemPrimitives(bundle).every(p=>clearPrimitive(p,temporary));}
     function bundleFor(entry,end,normal,shoulder) {
       const p=entry.pad,net=entry.net,def=defs.get(net.viaName),layer=entry.shape.layer;
       const points=[[p.x,p.y]];
@@ -121,9 +121,9 @@ function createRamenFanout(geometry, yieldTask, copper) {
     }
     rows.sort((a,b)=>b.entries.length-a.entries.length);
     let rowCount=0,rowIndex=0;
-    detail('Preparing SMD escapes · '+shapes.length+' eligible pads · '+rows.length+' dense rows',{stage:'fanout-rows',processed:0,total:rows.length},true);
+    detail("Finding SMD pad fanouts · "+shapes.length+" pads to try · "+rows.length+' dense rows',{stage:'fanout-rows',processed:0,total:rows.length},true);
     for(const row of rows){if(cancelled())break;rowIndex++;detail('Preparing dense row '+rowIndex+'/'+rows.length+' · '+row.entries.length+' pads',{stage:'fanout-rows',processed:rowIndex,total:rows.length});
-      spatial('Inspecting dense pad row '+rowIndex+'/'+rows.length,{stage:'fanout-row',processed:rowIndex,total:rows.length},()=>({kind:'pad',points:row.entries.slice(0,64).map(e=>[e.pad.x,e.pad.y,e.shape.layer]),label:'Current dense pad row'}));
+      spatial("Checking a crowded pad row "+rowIndex+'/'+rows.length,{stage:'fanout-row',processed:rowIndex,total:rows.length},()=>({kind:'pad',points:row.entries.slice(0,64).map(e=>[e.pad.x,e.pad.y,e.shape.layer]),label:'Current dense pad row'}));
       const entries=row.entries.filter(e=>!attached.has(e.pad.id));if(entries.length<2)continue;
       const width=Math.max(...entries.map(e=>e.net.width)),normalHalf=Math.max(...entries.map(e=>e.geometry.longSpan/2));
       const pitch=Math.max(...entries.map(e=>defs.get(e.net.viaName).diameter+clearance(e.net.id)))+Math.max(.02,width*.025);
@@ -146,7 +146,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
             if(bundle.pads.length===entries.length)break;
           }
           if(best?.pads.length===entries.length)break;
-          detail('Trying dense-row escapes · row '+rowIndex+'/'+rows.length+' · '+(best?.pads.length||0)+'/'+entries.length+' pads placed',{stage:'fanout-row-escapes',processed:rowIndex,total:rows.length,placed:best?.pads.length||0,pads:entries.length});await pause();
+          detail("Trying fanouts in crowded row "+rowIndex+'/'+rows.length+' · '+(best?.pads.length||0)+'/'+entries.length+" pads with fanouts",{stage:'fanout-row-escapes',processed:rowIndex,total:rows.length,placed:best?.pads.length||0,pads:entries.length});await pause();
         }
         if(best?.pads.length===entries.length)break;
       }
@@ -161,13 +161,13 @@ function createRamenFanout(geometry, yieldTask, copper) {
           if(cancelled()||clock()>rowDeadline)break;
           await pause();
           const entry=entries[i];let candidates=0,lastCandidateYield=Date.now();
-          detail('Checking escape positions · '+entry.net.name+' · pad '+(i+1)+'/'+entries.length,{stage:'fanout-candidates',netId:entry.net.id,netName:entry.net.name,processed:i+1,total:entries.length});
+          detail("Checking fanout positions · "+entry.net.name+' · pad '+(i+1)+'/'+entries.length,{stage:'fanout-candidates',netId:entry.net.id,netName:entry.net.name,processed:i+1,total:entries.length});
           candidateSearch:for(const sign of [1,-1])for(const offsetFactor of [2,2.5,3,3.5,4,4.5,5,6,7,8,10,12])for(const deltaFactor of [-2,-1.5,-1,-.75,-.5,-.25,0,.25,.5,.75,1,1.5,2])for(const shoulderFactor of [.05,.3,.55]){
             const normal=row.axis.map(v=>v*sign),offset=offsetFactor*width,t=entry.t+deltaFactor*width;
             const end=[row.axis[0]*(centerN+sign*offset)+row.tangent[0]*t,row.axis[1]*(centerN+sign*offset)+row.tangent[1]*t];
             const candidate=bundleFor(entry,end,normal,Math.min(entry.geometry.longSpan/2+width*shoulderFactor,offset));
             if(candidate&&legalBundle(candidate))choices[i].push(candidate);
-            if(++candidates%64===0){detail('Checking escape positions · '+entry.net.name+' · '+candidates+' candidates',{stage:'fanout-candidates',netId:entry.net.id,netName:entry.net.name,processed:i+1,total:entries.length,candidates});if(Date.now()-lastCandidateYield>=24){await pause();lastCandidateYield=Date.now();}if(cancelled())break candidateSearch;}
+            if(++candidates%64===0){detail("Checking fanout positions · "+entry.net.name+' · '+candidates+' candidates',{stage:'fanout-candidates',netId:entry.net.id,netName:entry.net.name,processed:i+1,total:entries.length,candidates});if(Date.now()-lastCandidateYield>=24){await pause();lastCandidateYield=Date.now();}if(cancelled())break candidateSearch;}
           }
         }
         const all=choices.map(list=>{const seen=new Set();return list.filter(b=>{const v=b.vias[0],k=[v.x,v.y,...b.traces.flatMap(t=>t.points.flat())].join('|');if(seen.has(k))return false;seen.add(k);b._primitives=itemPrimitives(b);return true;});});
@@ -191,7 +191,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
           combinations++;
           if(complete)return;
           if(!domains.length){complete=chosen;return;}
-          if(work%128===0){detail('Fitting dense-row escapes · row '+rowIndex+'/'+rows.length+' · '+work+' combinations checked',{stage:'fanout-combinations',processed:rowIndex,total:rows.length,combinations:work});spatial('Testing combined fanout escapes',{stage:'fanout-combinations',combinations:work},()=>bundleVisual({traces:chosen.flatMap(b=>b.traces),vias:chosen.flatMap(b=>b.vias)},'Actual fanout combination · being checked'));await pause();}
+          if(work%128===0){detail("Fitting fanouts into crowded row "+rowIndex+'/'+rows.length+' · '+work+' combinations checked',{stage:'fanout-combinations',processed:rowIndex,total:rows.length,combinations:work});spatial("Trying these fanouts together",{stage:'fanout-combinations',combinations:work},()=>bundleVisual({traces:chosen.flatMap(b=>b.traces),vias:chosen.flatMap(b=>b.vias)},"Combined fanouts being checked"));await pause();}
           domains.sort((a,b)=>a.length-b.length);
           if(!domains[0].length)return;
           for(const candidate of domains[0]){
@@ -203,14 +203,14 @@ function createRamenFanout(geometry, yieldTask, copper) {
         await searchChoices(all,[]);
         if(complete){best={traces:complete.flatMap(b=>b.traces),vias:complete.flatMap(b=>b.vias),pads:complete.flatMap(b=>b.pads)};}
       }
-      if(best&&best.pads.length){commit(best);rowCount++;detail('Checked off-grid fanout · '+(board.vias.length-initialVias)+' new escape vias · row '+rowIndex+'/'+rows.length,{stage:'fanout-rows',processed:rowIndex,total:rows.length,addedVias:board.vias.length-initialVias});}
+      if(best&&best.pads.length){commit(best);rowCount++;detail("Checked fanout between grid points · "+(board.vias.length-initialVias)+' new escape vias · row '+rowIndex+'/'+rows.length,{stage:'fanout-rows',processed:rowIndex,total:rows.length,addedVias:board.vias.length-initialVias});}
       await pause();
     }
     // Compact isolated pads and enclosed thermal pads get a conservative local search.
-    let padIndex=0;detail('Checking remaining SMD pad escapes',{stage:'fanout-pads',processed:0,total:shapes.length},true);
+    let padIndex=0;detail("Checking the remaining SMD pad fanouts",{stage:'fanout-pads',processed:0,total:shapes.length},true);
     for(const entry of shapes){if(cancelled())break;padIndex++;if(padIndex%32===0){detail('Checking SMD pads · '+padIndex+'/'+shapes.length,{stage:'fanout-pads',processed:padIndex,total:shapes.length});await pause();if(cancelled())break;}if(attached.has(entry.pad.id))continue;
-      detail('Trying pad escape · '+entry.net.name+' · '+padIndex+'/'+shapes.length,{stage:'fanout-pads',netId:entry.net.id,netName:entry.net.name,processed:padIndex,total:shapes.length});
-      spatial('Inspecting pad escape · '+entry.net.name,{stage:'fanout-pad',netId:entry.net.id,netName:entry.net.name},()=>{const box=G.shapeBounds(entry.shape);return{kind:'pad',points:[[entry.pad.x,entry.pad.y,entry.shape.layer]],bounds:[box.minX,box.minY,box.maxX,box.maxY],layer:entry.shape.layer,label:'Current pad escape'};});
+      detail("Trying a pad fanout · "+entry.net.name+' · '+padIndex+'/'+shapes.length,{stage:'fanout-pads',netId:entry.net.id,netName:entry.net.name,processed:padIndex,total:shapes.length});
+      spatial("Checking a pad fanout · "+entry.net.name,{stage:'fanout-pad',netId:entry.net.id,netName:entry.net.name},()=>{const box=G.shapeBounds(entry.shape);return{kind:'pad',points:[[entry.pad.x,entry.pad.y,entry.shape.layer]],bounds:[box.minX,box.minY,box.maxX,box.maxY],layer:entry.shape.layer,label:"Pad fanout being checked"};});
       const box=G.shapeBounds(entry.shape),shortSpan=Math.min(box.maxX-box.minX,box.maxY-box.minY),net=entry.net,p=entry.pad;
       let neighbours=0;for(const q of allPadShapes)if(q.shape.layer===entry.shape.layer&&q.pad.net!==p.net&&G.distanceShapes(entry.shape,q.shape)<net.width+clearance(net.id))neighbours++;
       const padLayerAllowed=traceLayers(net).includes(entry.shape.layer);
@@ -220,7 +220,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
       if(board.viaAtSmd&&defs.get(net.viaName).attachAllowed!==false){const b=bundleFor(entry,[p.x,p.y],[1,0],0);if(b&&legalBundle(b))found=b;}
       if(padLayerAllowed)for(const multiplier of [2,3,4,6,8,10]){if(found)break;for(const direction of directions){const end=[p.x+direction[0]*net.width*multiplier,p.y+direction[1]*net.width*multiplier],b=bundleFor(entry,end,direction,0);if(b&&legalBundle(b)){found=b;break;}}}
       if(!padLayerAllowed&&!found){
-        detail('Finding local access to main routing layers · '+net.name+' · '+p.id,{stage:'layer-access',netId:net.id,netName:net.name,padId:p.id},true);
+        detail("Finding a short fanout to the main routing layers · "+net.name+' · '+p.id,{stage:'layer-access',netId:net.id,netName:net.name,padId:p.id},true);
         const def=defs.get(net.viaName),limit=G.padEscapeLimit(board,p,net,def),gap=Math.max(net.width*.05,EPS*10);
         // Only this finite local escape may leave the chosen routing layers.
         // Rays start beyond the pad's extent plus the entire via radius, so
@@ -234,18 +234,18 @@ function createRamenFanout(geometry, yieldTask, copper) {
         }
         candidates.sort((a,b)=>a.distance-b.distance);
         for(const candidate of candidates){if(cancelled())break;const end=[p.x+candidate.direction[0]*candidate.distance,p.y+candidate.direction[1]*candidate.distance],bundle=bundleFor(entry,end,candidate.direction,0);if(bundle&&legalBundle(bundle)){found=bundle;break;}}
-        if(!found&&!cancelled()){const message='No legal local escape found for '+net.name+' at '+p.id+'. Try another main routing layer, move nearby copper or allow vias in SMD pads.';log.push(message);emit({type:'progress',phase:'fanout',message,activity:{stage:'layer-access-blocked',netId:net.id,netName:net.name,padId:p.id}});}
+        if(!found&&!cancelled()){const message="No short fanout fits the rules for "+net.name+' at '+p.id+". Try another main routing layer, move nearby copper, or allow vias in SMD pads.";log.push(message);emit({type:'progress',phase:'fanout',message,activity:{stage:'layer-access-blocked',netId:net.id,netName:net.name,padId:p.id}});}
       }
       if(found)commit(found);
       await pause();
     }
-    clearSpatial('fanout-check');detail('Checking completed fanout clearances and connectivity',{stage:'fanout-check',addedVias:board.vias.length-initialVias},true);await pause();
+    clearSpatial('fanout-check');detail("Checking the fanout’s clearances and connections",{stage:'fanout-check',addedVias:board.vias.length-initialVias},true);await pause();
     const validation=validate();
     if(validation.totalViolations>baseValidation.totalViolations||validation.belowNominalWidthTraceCount>baseValidation.belowNominalWidthTraceCount){
-      log.push('Fanout rejected: final geometric validation found new rule violations.');
+      log.push("Fanout discarded. The final check found new rule issues.");
       return {board:copy(input),addedVias:0,addedTraces:0,log,stopped:cancelled()};
     }
-    log.push('Checked geometric fanout: '+(board.vias.length-initialVias)+' vias and '+(board.traces.length-initialTraces)+' full-width stubs across '+rowCount+' dense rows.');
+    log.push("Checked fanout: "+(board.vias.length-initialVias)+' vias and '+(board.traces.length-initialTraces)+" full-width pad escapes across "+rowCount+' dense rows.');
     emit({type:'progress',phase:'fanout',message:log[log.length-1],board:copy(board),stats:G.stats(board,validation,connectivity(board))});
     return {board,addedVias:board.vias.length-initialVias,addedTraces:board.traces.length-initialTraces,log,stopped:cancelled()};
     }finally{flush();finishFanout?.();}

@@ -2,54 +2,54 @@
 
 /** Physical polygon pours. The self-contained factory is shared with Blob workers. */
 function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
-  if(!G||!C?.Clipper||!C?.ClipperOffset)throw new Error('Copper geometry is unavailable.');
+  if(!G||!C?.Clipper||!C?.ClipperOffset)throw new Error('The copper-fill tools did not load. Reload RamenRouter with all its files together.');
   const EPS=G.EPS||1e-8,cache=new WeakMap(),sharedCache=new Map(),MAX_VERTICES=2048,MAX_ZONES=64,MAX_HATCH_LINES=4000;
   const key=net=>G.netKey?G.netKey(net):String(net);
   const fail=message=>{throw new Error('Copper fill: '+message);};
   const area=points=>points.reduce((sum,p,i)=>{const q=points[(i+1)%points.length];return sum+p[0]*q[1]-q[0]*p[1];},0)/2;
   function ring(input,label) {
-    if(!Array.isArray(input)||input.length<3||input.length>MAX_VERTICES)fail(label+' needs 3–'+MAX_VERTICES+' points.');
+    if(!Array.isArray(input)||input.length<3||input.length>MAX_VERTICES)fail(label+' needs between 3 and '+MAX_VERTICES+' points.');
     let points=input.map(p=>{
-      if(!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)||p.some(n=>Math.abs(n)>1e9))fail(label+' has an invalid point.');
+      if(!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)||p.some(n=>Math.abs(n)>1e9))fail(label+' has an invalid point. Redraw that boundary.');
       return p.slice();
     });
     if(G.distance(points[0],points.at(-1))<=EPS)points.pop();
-    if(points.length<3||Math.abs(area(points))<=EPS)fail(label+' has no area.');
+    if(points.length<3||Math.abs(area(points))<=EPS)fail(label+' has no area. Place at least three points around some space.');
     for(let i=0;i<points.length;i++) {
-      if(G.distance(points[i],points[(i+1)%points.length])<=EPS)fail(label+' repeats a point.');
+      if(G.distance(points[i],points[(i+1)%points.length])<=EPS)fail(label+' repeats a point. Remove the duplicate point.');
       for(let j=i+1;j<points.length;j++) {
         if(j===i+1||i===0&&j===points.length-1)continue;
-        if(G.segmentIntersection(points[i],points[(i+1)%points.length],points[j],points[(j+1)%points.length]))fail(label+' crosses itself.');
+        if(G.segmentIntersection(points[i],points[(i+1)%points.length],points[j],points[(j+1)%points.length]))fail(label+' crosses itself. Move the points so its boundary does not cross.');
       }
     }
     return points;
   }
   function normalizeZones(board,zones=board.copperZones||[]) {
-    if(!Array.isArray(zones)||zones.length>MAX_ZONES)fail('Use at most '+MAX_ZONES+' regions.');
+    if(!Array.isArray(zones)||zones.length>MAX_ZONES)fail('Use no more than '+MAX_ZONES+' copper areas.');
     const layers=new Set((board.layers||[]).map((l,i)=>l.index??i)),nets=new Map((board.nets||[]).map(net=>[key(net.id),net])),ids=new Set();
     const defaults=Math.max(0,board.defaultClearance||0),scale=board.units?.mmPerUnit||1;
     return zones.map((input,i)=>{
-      if(!input||typeof input!=='object')fail('A region is invalid.');
-      const id=String(input.id||'copper-'+(i+1));if(id.length>100||ids.has(id))fail('Region identifiers must be unique.');ids.add(id);
-      const net=nets.get(key(input.net));if(!net||!Number.isInteger(net.id)||net.id<=0)fail('Choose a named net for each region.');
-      const layer=Number(input.layer);if(!Number.isInteger(layer)||!layers.has(layer))fail('Choose an existing copper layer.');
-      if(net.useLayers&&!net.useLayers.includes(layer))fail('The selected net is not permitted on this layer.');
-      const style=input.style||'solid';if(!['solid','grid45','grid90'].includes(style))fail('Unknown fill style.');
-      const padConnection=input.padConnection||'spoke';if(!['spoke','direct'].includes(padConnection))fail('Unknown pad connection.');
-      function number(field,fallback,positive=false){const value=input[field]===undefined?fallback:Number(input[field]);if(!Number.isFinite(value)||value<0||positive&&value<=0||value>1e9)fail(field+' is invalid.');return value;}
+      if(!input||typeof input!=='object')fail('A copper area has invalid settings.');
+      const id=String(input.id||'copper-'+(i+1));if(id.length>100||ids.has(id))fail('Each copper area needs its own ID, no longer than 100 characters.');ids.add(id);
+      const net=nets.get(key(input.net));if(!net||!Number.isInteger(net.id)||net.id<=0)fail('Choose a net from this board for each copper area.');
+      const layer=Number(input.layer);if(!Number.isInteger(layer)||!layers.has(layer))fail('Choose a copper layer from this board.');
+      if(net.useLayers&&!net.useLayers.includes(layer))fail('Your net rules do not allow this net on that layer. Change the layer or the net rule.');
+      const style=input.style||'solid';if(!['solid','grid45','grid90'].includes(style))fail('Choose Solid, Grid · 45° or Grid · 90° for the fill style.');
+      const padConnection=input.padConnection||'spoke';if(!['spoke','direct'].includes(padConnection))fail('Choose Direct or Spokes for the pad connection.');
+      function number(field,fallback,positive=false){const value=input[field]===undefined?fallback:Number(input[field]);if(!Number.isFinite(value)||value<0||positive&&value<=0||value>1e9)fail(field+' is invalid. Check its value.');return value;}
       const spokeWidth=number('spokeWidth',Math.max(net.width||0,0.25/scale),true),gridWidth=number('gridWidth',Math.max(net.width||0,0.25/scale),true),gridPitch=number('gridPitch',Math.max(gridWidth*4,1/scale),true);
-      if(spokeWidth+EPS<(net.width||0))fail('Spokes must be at least the selected net’s trace width.');
-      if(style!=='solid'&&(gridWidth+EPS<(net.width||0)||gridPitch<=gridWidth+EPS))fail('Grid pitch must exceed grid width, and grid width must meet the net’s trace width.');
-      if(input.keepIslands!==undefined&&typeof input.keepIslands!=='boolean'||input.enabled!==undefined&&typeof input.enabled!=='boolean')fail('Region switches must be yes or no.');
-      const points=ring(input.points,'Region '+(i+1)),cutouts=(input.cutouts||[]).map((p,n)=>ring(p,'Cutout '+(n+1)));
-      if(cutouts.length>64)fail('Use at most 64 cutouts per region.');
+      if(spokeWidth+EPS<(net.width||0))fail('Spokes need to be at least as wide as this net’s traces.');
+      if(style!=='solid'&&(gridWidth+EPS<(net.width||0)||gridPitch<=gridWidth+EPS))fail('Keep grid spacing wider than the copper lines, and the lines at least as wide as this net’s traces.');
+      if(input.keepIslands!==undefined&&typeof input.keepIslands!=='boolean'||input.enabled!==undefined&&typeof input.enabled!=='boolean')fail('Each copper-area switch needs an on or off setting.');
+      const points=ring(input.points,'Copper area '+(i+1)),cutouts=(input.cutouts||[]).map((p,n)=>ring(p,'Cutout '+(n+1)));
+      if(cutouts.length>64)fail('Use no more than 64 cutouts per copper area.');
       return {id,name:String(input.name||'Copper '+(i+1)).slice(0,100),net:net.id,layer,points,cutouts,style,
         keepIslands:input.keepIslands===true,padConnection,clearance:number('clearance',Math.max(defaults,net.clearance||0)),
         edgeClearance:number('edgeClearance',Math.max(board.edgeClearance||0,defaults)),thermalGap:number('thermalGap',Math.max(defaults,net.clearance||0)),
         spokeWidth,gridPitch,gridWidth,enabled:input.enabled!==false};
     });
   }
-  function aborted(cancel){if(cancel?.()){const error=new Error('Copper filling stopped.');error.name='AbortError';throw error;}}
+  function aborted(cancel){if(cancel?.()){const error=new Error('Copper fill stopped.');error.name='AbortError';throw error;}}
   function signature(board,zones,options){
     const active=zones.filter(zone=>zone.enabled),onlyNet=active[0]?.net;
     const ignoreOwn=active.length&&active.every(zone=>zone.net===onlyNet)&&(options.keepUnanchored||active.every(zone=>zone.keepIslands));
@@ -122,7 +122,7 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
       const angles=zone.style==='grid45'?[Math.PI/4,-Math.PI/4]:[0,Math.PI/2],strips=[];
       for(const angle of angles){const ux=Math.cos(angle),uy=Math.sin(angle),vx=-uy,vy=ux;
         const centreProjection=cx*vx+cy*vy,low=Math.floor((centreProjection-reach)/zone.gridPitch),high=Math.ceil((centreProjection+reach)/zone.gridPitch);
-        if(high-low>MAX_HATCH_LINES/angles.length)fail('Grid spacing creates too many strips; use a larger pitch.');
+        if(high-low>MAX_HATCH_LINES/angles.length)fail('This grid has too many lines. Increase the grid spacing and try again.');
         for(let n=low;n<=high;n++){const shift=n*zone.gridPitch-centreProjection,x=cx+vx*shift,y=cy+vy*shift,w=zone.gridWidth/2;
           strips.push(path([[x-ux*reach-vx*w,y-uy*reach-vy*w],[x+ux*reach-vx*w,y+uy*reach-vy*w],[x+ux*reach+vx*w,y+uy*reach+vy*w],[x-ux*reach+vx*w,y-uy*reach+vy*w]]));}
       }

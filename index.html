@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="RamenRouter, a portable offline PCB routing workbench.">
-  <title>RamenRouter — PCB routing workbench</title>
+  <meta name="description" content="Make it fit. Make it work. Load your DSN, let it cook, and export your routes.">
+  <title>RamenRouter — make it fit, make it work</title>
   <link rel="icon" href="images/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles/main.css">
   <script src="scripts/demo-data.js" defer></script>
@@ -27,45 +27,45 @@
   <header class="app-header">
     <div class="brand" aria-label="RamenRouter">
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
-      <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">PCB ROUTING WORKBENCH</span></span>
+      <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">BROWSER ENGINE</span><strong id="engineVersion">Ramen JS 0.3.1</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
-    <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Starting browser engine</span></div>
-    <button class="icon-button help-button" id="helpButton" title="About this workbench" aria-label="About this workbench">?</button>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.2</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
+    <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
 
-  <div id="disconnectBanner" class="connection-banner" hidden>The browser engine could not start. Keep every file in this folder together and reopen index.html.</div>
+  <div id="disconnectBanner" class="connection-banner" hidden>Couldn't get routing ready. Keep all the files together and open index.html again.</div>
 
   <main class="workspace">
     <aside class="sidebar">
       <div class="sidebar-scroll">
-      <div class="section-kicker"><span class="section-number">01</span> BOARD INPUT</div>
+      <div class="section-kicker"><span class="section-number">01</span> YOUR BOARD</div>
       <input id="fileInput" type="file" accept=".dsn" hidden>
-      <button class="dropzone" id="dropzone" aria-label="Choose or drop a Specctra DSN file">
+      <button class="dropzone" id="dropzone" aria-label="Choose or drop your DSN board">
         <span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M16 21V7m-5 5 5-5 5 5M7 21v5h18v-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <strong id="dropTitle">Drop your board here</strong>
         <span id="dropDescription">or click to browse a <b>.dsn</b> file</span>
-        <span class="format-tag">SPECCTRA DESIGN FILE</span>
+        <span class="format-tag">YOUR DSN FILE</span>
       </button>
       <div id="fileCard" class="file-card" hidden><div class="file-symbol">DSN</div><div class="file-copy"><strong id="fileName"></strong><span id="fileDetail">Board loaded</span></div><button class="icon-button" id="replaceButton" title="Choose another board" aria-label="Choose another board">↻</button></div>
       <button class="clear-routing-button" id="clearRoutingButton" type="button" hidden disabled>Clear routing &amp; start over</button>
       <button class="text-button demo-button" id="demoButton">Try the included example <span aria-hidden="true">↗</span></button>
 
       <div class="section-rule"></div>
-      <div class="section-kicker"><span class="section-number">02</span> ROUTING SETUP <span class="edition-tag" id="routingModeTag">SMART</span></div>
-      <div class="engine-card"><span class="engine-glyph" aria-hidden="true">⤳</span><div><strong id="routingModeName">Ramen smart routing</strong><p id="routingModeDetail">Search across multiple routing attempts.</p></div><span class="selected-tick" aria-label="Selected">✓</span></div>
+      <div class="section-kicker"><span class="section-number">02</span> HOW TO ROUTE <span class="edition-tag" id="routingModeTag">SMART</span></div>
+      <div class="engine-card"><span class="engine-glyph" aria-hidden="true">⤳</span><div><strong id="routingModeName">Ramen smart routing</strong><p id="routingModeDetail">Try different routes and keep the best checked result.</p></div><span class="selected-tick" aria-label="Selected">✓</span></div>
       <div class="net-layers-setting" id="netLayersSetting" hidden>
         <button class="net-layers-button" id="netLayersButton" type="button" aria-haspopup="dialog" disabled>Routing rules <span aria-hidden="true">›</span></button>
-        <p id="netLayersSummary">Choose layers and prioritize shorter routes for each net.</p>
+        <p id="netLayersSummary">Pick the layers each net can use, and which routes you want shorter.</p>
       </div>
       <div class="copper-setting" id="copperSetting" hidden>
         <div class="section-rule"></div>
         <div class="section-kicker">COPPER FILLS <span class="edition-tag">NEW</span></div>
         <button id="copperButton" class="net-layers-button" type="button" aria-haspopup="dialog" disabled>Copper fills <span aria-hidden="true">›</span></button>
-        <p id="copperSummary">Create a copper area connected to a net.</p>
+        <p id="copperSummary">Give a net a copper area to connect to.</p>
       </div>
       </div>
-      <div class="run-controls"><p class="net-layer-conflict" id="netLayerConflict" role="status" hidden></p><button class="primary-button" id="runButton" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6V4Z" fill="currentColor"/></svg><span id="runLabel">Start routing</span><span class="button-shortcut">↵</span></button><button class="stop-button" id="stopButton" hidden><span class="stop-square"></span>Stop job</button><button class="force-stop-button" id="forceStopButton" hidden>Force stop</button><button class="view-stopped-button" id="viewStoppedResult" type="button" hidden>View best result</button><p class="run-hint" id="runHint">Load a board to begin.</p></div>
+      <div class="run-controls"><p class="net-layer-conflict" id="netLayerConflict" role="status" hidden></p><button class="primary-button" id="runButton" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6V4Z" fill="currentColor"/></svg><span id="runLabel">Start routing</span><span class="button-shortcut">↵</span></button><button class="stop-button" id="stopButton" hidden><span class="stop-square"></span>Stop routing</button><button class="force-stop-button" id="forceStopButton" hidden>Force stop</button><button class="view-stopped-button" id="viewStoppedResult" type="button" hidden>View best result</button><p class="run-hint" id="runHint">Load a board to begin.</p></div>
       <div class="sidebar-foot"><span class="lock-icon" aria-hidden="true">⌁</span> Your board stays on this computer.</div>
     </aside>
 
@@ -78,22 +78,22 @@
           <div><strong id="copperDrawTitle">Draw copper boundary</strong><span id="copperDrawInstruction" role="status" aria-live="polite">Click to place points. Finish closes the shape.</span></div>
           <div class="copper-draw-actions"><button id="undoCopperPoint" type="button">Undo point</button><button id="finishCopperDrawing" type="button">Finish shape</button><button id="cancelCopperDrawing" type="button">Cancel</button></div>
         </section>
-        <div class="connection-activity-label" id="connectionActivityLabel" hidden><strong id="activityVisualTitle">Engine activity</strong><span id="activityVisualDetail">No location reported for this stage</span></div>
-        <div class="empty-board" id="emptyBoard"><div class="empty-board-art" aria-hidden="true"><svg viewBox="0 0 190 135" fill="none"><rect x="25" y="14" width="140" height="104" rx="10" stroke="currentColor" stroke-width="1.4"/><rect x="74" y="45" width="44" height="43" rx="3" stroke="currentColor" stroke-width="1.4"/><path d="M82 45V33H47v16m45-4V26h48v16m-22 13h24v39h-13M118 68h34M106 88v17H63V84m22 4v8H46V66m28-10H60v15" stroke="currentColor" stroke-width="1.4"/><circle cx="47" cy="52" r="4" stroke="currentColor"/><circle cx="140" cy="46" r="4" stroke="currentColor"/><circle cx="46" cy="62" r="4" stroke="currentColor"/><circle cx="63" cy="80" r="4" stroke="currentColor"/><circle cx="60" cy="75" r="4" stroke="currentColor"/><circle cx="125" cy="94" r="4" stroke="currentColor"/><circle cx="155" cy="68" r="3" stroke="currentColor"/></svg></div><span class="eyebrow">LOCAL ENGINE · PRECISE CONTROL</span><h1>Your next route starts here.</h1><p>Bring in a DSN board, choose your settings,<br>and let RamenRouter get to work.</p><div class="empty-keys"><kbd>SCROLL</kbd> Zoom <span>·</span> <kbd>DRAG</kbd> Pan <span>·</span> <kbd>F</kbd> Fit</div></div>
-        <div class="board-busy" id="boardBusy" hidden><span class="spinner"></span><span>Loading board geometry</span></div>
-        <div class="canvas-label" id="canvasLabel" hidden><span class="live-dot"></span><span id="canvasLabelText">Input board</span></div>
+        <div class="connection-activity-label" id="connectionActivityLabel" hidden><strong id="activityVisualTitle">Routing activity</strong><span id="activityVisualDetail">No spot to highlight for this step</span></div>
+        <div class="empty-board" id="emptyBoard"><div class="empty-board-art" aria-hidden="true"><svg viewBox="0 0 190 135" fill="none"><rect x="25" y="14" width="140" height="104" rx="10" stroke="currentColor" stroke-width="1.4"/><rect x="74" y="45" width="44" height="43" rx="3" stroke="currentColor" stroke-width="1.4"/><path d="M82 45V33H47v16m45-4V26h48v16m-22 13h24v39h-13M118 68h34M106 88v17H63V84m22 4v8H46V66m28-10H60v15" stroke="currentColor" stroke-width="1.4"/><circle cx="47" cy="52" r="4" stroke="currentColor"/><circle cx="140" cy="46" r="4" stroke="currentColor"/><circle cx="46" cy="62" r="4" stroke="currentColor"/><circle cx="63" cy="80" r="4" stroke="currentColor"/><circle cx="60" cy="75" r="4" stroke="currentColor"/><circle cx="125" cy="94" r="4" stroke="currentColor"/><circle cx="155" cy="68" r="3" stroke="currentColor"/></svg></div><span class="eyebrow">LET'S MAKE IT FIT</span><h1>Got a crowded board?</h1><p>Drop in your DSN, choose your rules,<br>and let it cook.</p><div class="empty-keys"><kbd>SCROLL</kbd> Zoom <span>·</span> <kbd>DRAG</kbd> Pan <span>·</span> <kbd>F</kbd> Fit</div></div>
+        <div class="board-busy" id="boardBusy" hidden><span class="spinner"></span><span>Reading your board</span></div>
+        <div class="canvas-label" id="canvasLabel" hidden><span class="live-dot"></span><span id="canvasLabelText">Your starting board</span></div>
         <div class="advice-focus-chip" id="adviceFocusChip" hidden><span id="adviceFocusLabel">Suggestion area</span><button id="clearAdviceFocus" type="button" aria-label="Clear suggestion highlight" title="Clear suggestion highlight">×</button></div>
         <button class="advice-jump" id="showPlacementAdvice" type="button" hidden><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M10 1v5m0 8v5M1 10h5m8 0h5" stroke="currentColor" stroke-width="1.4"/></svg> Placement advice <span id="placementAdviceCount"></span></button>
         <div class="canvas-axis" aria-hidden="true"><span class="axis-y">Y</span><span class="axis-x">X</span><span class="axis-origin">⊥</span></div>
       </div>
       <div class="board-statusbar"><span id="geometrySummary">No board loaded</span><span id="cursorPosition">Drag to pan · scroll to zoom</span></div>
-      <section class="activity-panel" aria-label="Engine activity"><div class="activity-header"><button class="activity-title" id="logToggle" aria-expanded="true"><span class="terminal-icon" aria-hidden="true">›_</span> Engine activity <span id="logCount">0</span><span id="logChevron">⌄</span></button><div class="activity-actions"><label class="autoscroll-label"><input type="checkbox" id="autoScroll" checked>Follow</label><button id="copyLog" class="text-button" title="Copy engine log">Copy</button></div></div><div class="engine-activity" id="engineActivity" hidden><span id="engineActivityMessage" role="status" aria-live="polite"></span><small id="engineActivityAge"></small></div><div class="log-scroll" id="logScroll" role="log" aria-label="Routing log"><div class="log-placeholder" id="logPlaceholder"><span>—</span> The engine log will appear here when you load a board.</div><pre id="logText"></pre></div></section>
+      <section class="activity-panel" aria-label="Routing activity"><div class="activity-header"><button class="activity-title" id="logToggle" aria-expanded="true"><span class="terminal-icon" aria-hidden="true">›_</span> Routing activity <span id="logCount">0</span><span id="logChevron">⌄</span></button><div class="activity-actions"><label class="autoscroll-label"><input type="checkbox" id="autoScroll" checked>Follow</label><button id="copyLog" class="text-button" title="Copy routing log">Copy</button></div></div><div class="engine-activity" id="engineActivity" hidden><span id="engineActivityMessage" role="status" aria-live="polite"></span><small id="engineActivityAge"></small></div><div class="log-scroll" id="logScroll" role="log" aria-label="Routing log"><div class="log-placeholder" id="logPlaceholder"><span>—</span> Load a board and you'll see what's happening here.</div><pre id="logText"></pre></div></section>
     </section>
 
     <aside class="inspector">
       <div class="inspector-scroll">
-      <div class="section-kicker"><span class="section-number">03</span> JOB OVERVIEW</div>
-      <div class="job-state" id="jobState"><span class="job-state-icon" id="jobStateIcon">○</span><div><h2 id="stateTitle">Ready when you are</h2><p id="phaseLabel">No active job</p></div></div>
+      <div class="section-kicker"><span class="section-number">03</span> HOW IT'S GOING</div>
+      <div class="job-state" id="jobState"><span class="job-state-icon" id="jobStateIcon">○</span><div><h2 id="stateTitle">Ready when you are</h2><p id="phaseLabel">Nothing running</p></div></div>
       <section class="stop-result-prompt" id="stopResultPrompt" aria-labelledby="stopResultTitle" hidden>
         <h3 id="stopResultTitle">Routing stopped</h3>
         <p id="stopResultDetail" role="status" aria-live="polite"></p>
@@ -108,71 +108,71 @@
       </section>
       <div class="elapsed-row"><span>Elapsed time</span><strong id="elapsedValue">—</strong></div>
       <section class="run-progress" id="runProgress" aria-label="Routing attempts and time budget" hidden>
-        <div class="run-progress-card" id="attemptProgress"><span>Attempt #</span><strong id="attemptValue">Preparing</strong><small id="attemptDetail">Waiting for engine counters</small></div>
-        <div class="run-progress-card" id="timeLeftProgress"><span>Time left</span><strong id="timeLeftValue">—</strong><small id="timeLeftDetail">Time limit · not a finish estimate</small></div>
-        <div class="run-progress-card run-round-card" id="refinementProgress"><span>Refinement</span><strong id="refinementValue">Not started</strong><small id="refinementDetail">Waiting for engine counters</small></div>
-        <div class="run-progress-card run-round-card" id="repairProgress"><span>Finishing repairs</span><strong id="repairValue">Not started</strong><small id="repairDetail">Waiting for engine counters</small></div>
+        <div class="run-progress-card" id="attemptProgress"><span>Attempt #</span><strong id="attemptValue">Preparing</strong><small id="attemptDetail">Waiting for the first update</small></div>
+        <div class="run-progress-card" id="timeLeftProgress"><span>Time left</span><strong id="timeLeftValue">—</strong><small id="timeLeftDetail">Your time budget · not a finish estimate</small></div>
+        <div class="run-progress-card run-round-card" id="refinementProgress"><span>Refinement</span><strong id="refinementValue">Not started</strong><small id="refinementDetail">Waiting for the first update</small></div>
+        <div class="run-progress-card run-round-card" id="repairProgress"><span>Finishing repairs</span><strong id="repairValue">Not started</strong><small id="repairDetail">Waiting for the first update</small></div>
         <p class="round-work-detail" id="roundWorkDetail" hidden></p>
       </section>
       <div class="phase-track" id="phaseTrack" aria-label="Routing stages"><span data-stage="input" title="Input"></span><span data-stage="fanout" title="Optional fanout"></span><span data-stage="route" title="Routing"></span><span data-stage="optimize" title="Optimization"></span><span data-stage="done" title="Complete"></span></div>
       <div class="phase-caption"><span id="phaseCaption">Waiting for a board</span><span id="passLabel"></span></div>
       <div class="stats-grid" id="statsGrid"><div class="stat-card"><span>Unrouted</span><strong id="unroutedValue">—</strong><small id="unroutedChange">No board loaded</small></div><div class="stat-card"><span>Vias</span><strong id="viasValue">—</strong><small id="viasChange">No board loaded</small></div><div class="stat-card"><span>Trace length · mm</span><strong id="tracesValue">—</strong><small id="tracesChange">No board loaded</small></div><div class="stat-card"><span>Rule issues</span><strong id="connectionsValue">—</strong><small id="connectionsChange">Final check pending</small></div></div>
-      <div class="width-check"><span>Below net width</span><strong id="widthValue">—</strong><small id="widthDetail">Check pending</small></div>
+      <div class="width-check"><span>Traces too thin</span><strong id="widthValue">—</strong><small id="widthDetail">Check pending</small></div>
       <div class="job-error" id="jobError" hidden></div>
       <section class="remaining-routes" id="remainingRoutes" aria-labelledby="remainingRoutesTitle" hidden>
-        <h3 id="remainingRoutesTitle">Connections still missing</h3>
+        <h3 id="remainingRoutesTitle">Still needs a connection</h3>
         <p id="remainingRoutesDetail"></p>
         <div id="remainingRoutesList" class="remaining-routes-list"></div>
-        <p class="remaining-routes-help">Gold dashed lines mark the gaps. Choose a net to find it on the board.</p>
+        <p class="remaining-routes-help">The gold dashed lines show what is missing. Pick a net to see where it is.</p>
       </section>
       <section class="placement-advice" id="placementAdvice" aria-labelledby="placementAdviceTitle" hidden>
-        <div class="advice-heading"><h3 id="placementAdviceTitle">Placement advice</h3><span class="advice-check-label">REROUTE TO CHECK</span></div>
-        <p class="advice-intro">Possible changes to try in your PCB editor. Reroute afterward to check whether they help.</p>
-        <details class="advice-label-note" id="placementLabelNote" hidden><summary>Original component labels unavailable</summary><p id="placementLabelDetail">This DSN does not include the original component labels. Use the pad, net and location shown below.</p></details>
+        <div class="advice-heading"><h3 id="placementAdviceTitle">Placement advice</h3><span class="advice-check-label">TRY IT, THEN REROUTE</span></div>
+        <p class="advice-intro">Changes worth trying in your PCB editor. Reroute afterward to see if they help.</p>
+        <details class="advice-label-note" id="placementLabelNote" hidden><summary>No component names in this file</summary><p id="placementLabelDetail">This DSN doesn't include the component names. Use the pad, net and position below to find the part.</p></details>
         <div class="advice-findings" id="placementAdviceItems"></div>
       </section>
-      <section class="via-suggestion direction-suggestion" id="directionSuggestion" aria-labelledby="directionSuggestionTitle" hidden><h3 id="directionSuggestionTitle">Try without preferred directions?</h3><p id="directionSuggestionDetail"></p><p class="suggestion-note">Relaxing this preference may help, but it may not be the reason connections remain. Save your current result before starting again.</p><div class="suggestion-actions"><button id="relaxDirectionsRetry" type="button">Turn off preference &amp; retry</button><button id="dismissDirectionSuggestion" type="button">Keep current result</button></div></section>
+      <section class="via-suggestion direction-suggestion" id="directionSuggestion" aria-labelledby="directionSuggestionTitle" hidden><h3 id="directionSuggestionTitle">Try without alternating directions?</h3><p id="directionSuggestionDetail"></p><p class="suggestion-note">Turning this off might help. It doesn't mean it caused the missing connections. Save this result before trying again.</p><div class="suggestion-actions"><button id="relaxDirectionsRetry" type="button">Turn off preference &amp; retry</button><button id="dismissDirectionSuggestion" type="button">Keep current result</button></div></section>
       <section class="via-suggestion" id="viaSuggestion" aria-labelledby="viaSuggestionTitle" aria-live="polite" hidden>
         <h3 id="viaSuggestionTitle">Try vias in SMD pads?</h3>
         <p id="viaSuggestionDetail"></p>
-        <p>This changes your board’s via-placement rule. Only enable it if your board can be made with vias in these pads.</p>
-        <p class="suggestion-note">A retry replaces this result. Download it first if you want to keep it.</p>
+        <p>This allows holes inside SMD pads. Only turn it on if your board can be made that way.</p>
+        <p class="suggestion-note">Trying again replaces this result. Download it first if you want to keep it.</p>
         <div class="suggestion-actions"><button class="primary-button" id="enableViaRetry" type="button">Enable and reroute</button><button class="text-button" id="dismissViaSuggestion" type="button">Keep current rules</button></div>
       </section>
       <div class="section-rule"></div>
       <div class="section-kicker">VISIBLE LAYERS <span id="layerCount" class="muted-count">0</span></div>
-      <div id="layersList" class="layers-list"><p class="muted-empty">Board layers appear after import.</p></div>
-      <div class="view-options"><label class="checkbox-row view-option"><input type="checkbox" id="showPads" checked><span>Pads & vias</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showAirwires" title="Guide lines between pad groups that still need a connection" checked><span>Airwires</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showCopper" checked><span>Copper fills</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showLiveWork" checked><span>Live work</span></label></div>
+      <div id="layersList" class="layers-list"><p class="muted-empty">Load a board to see its layers.</p></div>
+      <div class="view-options"><label class="checkbox-row view-option"><input type="checkbox" id="showPads" checked><span>Pads & vias</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showAirwires" title="Lines showing connections that still need routing" checked><span>Airwires</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showCopper" checked><span>Copper fills</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showLiveWork" checked><span>Live work</span></label></div>
       </div>
       <div class="export-controls">
-      <div class="section-kicker">EXPORT RESULTS</div>
-      <p class="export-ready-message" id="exportReadyMessage" role="status" aria-live="polite" hidden>All connections routed. Your routing session is ready to export.</p>
+      <div class="section-kicker">SAVE YOUR ROUTES</div>
+      <p class="export-ready-message" id="exportReadyMessage" role="status" aria-live="polite" hidden>All connected. Download your routing session when you're ready.</p>
       <button id="downloadSes" class="export-button" disabled><span class="export-file-type">SES</span><span><strong>Routing session</strong><small>Import into your PCB editor</small></span><span class="download-arrow" aria-hidden="true">↓</span></button>
-      <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Engine log <span aria-hidden="true">↓</span></button></div>
+      <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Routing log <span aria-hidden="true">↓</span></button></div>
       <button id="downloadCopper" class="run-report-button" type="button" hidden disabled>Save copper settings <span aria-hidden="true">↓</span></button>
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
-      <p id="copperExportNote" class="copper-export-note" hidden>These temporary fills guide routing here. Your exported DSN keeps only the copper that came with your file, and SES carries tracks and vias. Use matching copper pours in your PCB editor, refill them, and check connectivity.</p>
-      <p class="export-note">Check clearances, connectivity and design rules in your PCB editor before manufacturing.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.1</span><span>Independent browser engine · GPL-3.0</span></div>
+      <p id="copperExportNote" class="copper-export-note" hidden>These fills help route your board here. They stay here: DSN keeps your file's original copper, and SES carries tracks and vias. Refill matching copper pours in your PCB editor and check the connections.</p>
+      <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.2</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="runReportDialog" class="run-report-dialog" aria-labelledby="runReportTitle" aria-describedby="runReportDescription">
-    <div class="dialog-header"><span class="section-kicker">THE WORK BEHIND THE ROUTES</span><button id="closeRunReport" class="icon-button" type="button" aria-label="Close run report">×</button></div>
+    <div class="dialog-header"><span class="section-kicker">WHAT WENT INTO THIS RUN</span><button id="closeRunReport" class="icon-button" type="button" aria-label="Close run report">×</button></div>
     <h2 id="runReportTitle">Run report</h2>
-    <p id="runReportDescription">See where the time went, how much work the engine did, and the quality of the result.</p>
+    <p id="runReportDescription">See where the time went, what the router tried, and how the board ended up.</p>
     <p id="reportOutcome" class="report-outcome"></p>
     <div class="report-headlines">
       <div><span>Processing time</span><strong id="reportActiveTime">—</strong><small>Time spent working; pauses excluded</small></div>
-      <div><span>First complete, checked route</span><strong id="reportFirstComplete">—</strong><small id="reportFirstCompleteNote">All connections and imported checks passed</small></div>
-      <div><span>Connections remaining</span><strong id="reportRemaining">—</strong><small>In the retained checked result</small></div>
-      <div><span>Rule issues</span><strong id="reportRuleIssues">—</strong><small id="reportRuleNote">Imported rules checked by RamenRouter</small></div>
+      <div><span>First complete, checked route</span><strong id="reportFirstComplete">—</strong><small id="reportFirstCompleteNote">All connected, with the imported checks passed</small></div>
+      <div><span>Connections remaining</span><strong id="reportRemaining">—</strong><small>In your best checked result</small></div>
+      <div><span>Rule issues</span><strong id="reportRuleIssues">—</strong><small id="reportRuleNote">Checked against your board's imported rules</small></div>
     </div>
     <section class="report-section" aria-labelledby="reportStageTitle"><h3 id="reportStageTitle">Where the time went</h3><div id="reportStages" class="report-stages"></div><p id="reportCoverageNote" class="report-note"></p></section>
-    <section class="report-section" aria-labelledby="reportProgressTitle"><h3 id="reportProgressTitle">Connections remaining over time</h3><div id="reportProgressChart" class="report-progress-chart"></div><p id="reportProgressNote" class="report-note">Checked results during the run; the final point shows the retained result when available. Many paths may be tested between these points.</p></section>
-    <details id="reportDetails" class="report-details"><summary>Search effort &amp; result details</summary><dl id="reportDetailStats" class="report-detail-stats"></dl><h3>Hardest nets</h3><p class="report-note">Ranked by grid positions explored. Names help locate nets on this board; only anonymous net numbers are included in exported benchmarks.</p><div class="report-table-scroll"><table class="report-table"><caption class="visually-hidden">Search effort for the hardest nets</caption><thead><tr><th scope="col">Net</th><th scope="col">Searches</th><th scope="col">Grid positions</th><th scope="col">Search time</th></tr></thead><tbody id="reportHardest"></tbody></table></div><p id="reportEnvironment" class="report-note"></p></details>
-    <section class="report-section report-share" aria-labelledby="reportShareTitle"><h3 id="reportShareTitle">Compare your computers</h3><label for="reportDeviceLabel">Name this computer <input id="reportDeviceLabel" type="text" maxlength="80" placeholder="e.g. Desktop or travel laptop" autocomplete="off"></label><p class="report-note">Exports include timings, counts, settings, browser details and board fingerprints. They do not include board geometry, file names or net names. The computer name is your own label.</p><div class="report-actions"><button id="exportBenchmark" type="button">Export benchmark</button><button id="compareBenchmarkButton" type="button">Compare benchmark…</button><input id="benchmarkFileInput" type="file" accept=".json,application/json" hidden></div><p id="benchmarkImportError" class="report-error" role="alert" hidden></p></section>
+    <section class="report-section" aria-labelledby="reportProgressTitle"><h3 id="reportProgressTitle">Connections remaining over time</h3><div id="reportProgressChart" class="report-progress-chart"></div><p id="reportProgressNote" class="report-note">These are checked results from the run. The last point shows your best result when available. Plenty of paths can be tried between points.</p></section>
+    <details id="reportDetails" class="report-details"><summary>What it tried &amp; what you got</summary><dl id="reportDetailStats" class="report-detail-stats"></dl><h3>Hardest nets</h3><p class="report-note">These nets took the most searching. Use their names to find them on your board. Exported benchmarks use anonymous net numbers instead.</p><div class="report-table-scroll"><table class="report-table"><caption class="visually-hidden">Search effort for the hardest nets</caption><thead><tr><th scope="col">Net</th><th scope="col">Searches</th><th scope="col">Grid positions</th><th scope="col">Search time</th></tr></thead><tbody id="reportHardest"></tbody></table></div><p id="reportEnvironment" class="report-note"></p></details>
+    <section class="report-section report-share" aria-labelledby="reportShareTitle"><h3 id="reportShareTitle">Compare your computers</h3><label for="reportDeviceLabel">Name this computer <input id="reportDeviceLabel" type="text" maxlength="80" placeholder="e.g. Desktop or travel laptop" autocomplete="off"></label><p class="report-note">The report includes times, counts, settings, browser details and a board fingerprint. It leaves out your board layout, filename and net names. Give this computer a name you'll recognise.</p><div class="report-actions"><button id="exportBenchmark" type="button">Export benchmark</button><button id="compareBenchmarkButton" type="button">Compare benchmark…</button><input id="benchmarkFileInput" type="file" accept=".json,application/json" hidden></div><p id="benchmarkImportError" class="report-error" role="alert" hidden></p></section>
     <section id="benchmarkCompareSection" class="report-section" aria-labelledby="benchmarkCompareTitle" hidden><div class="report-compare-heading"><h3 id="benchmarkCompareTitle">Benchmark comparison</h3><button id="clearBenchmarkComparison" type="button">Clear comparison</button></div><p id="benchmarkCompareStatus" class="report-comparison-status" role="status"></p><div class="report-table-scroll"><table id="benchmarkCompareTable" class="report-table"></table></div><p class="report-note">This compares routing in these browsers. It doesn't test every processor core at once. Power settings, other apps and browser versions can affect the time. Repeat a run if something looks odd.</p></section>
     <div class="report-footer"><button id="closeRunReportBottom" type="button">Back to the board</button></div>
   </dialog>
@@ -181,38 +181,38 @@
     <h2 id="previousRulesTitle">Reuse previous routing rules?</h2>
     <p id="previousRulesCount"></p>
     <dl class="previous-rules-files"><div><dt>Previous board</dt><dd id="previousRulesOldName"></dd></div><div><dt>New import</dt><dd id="previousRulesNewName"></dd></div></dl>
-    <p id="previousRulesDescription">Reuse your selected main layers and <strong>Prefer shorter routes</strong> choices for matching nets. The layout, traces, vias and other board rules come from the new file. Global routing options stay as you set them.</p>
-    <p class="previous-rules-note">Use imported rules to keep this file's own choices. Closing this dialog or pressing Escape does the same.</p>
+    <p id="previousRulesDescription">Bring over your main layers and <strong>Prefer shorter routes</strong> choices for matching nets. The new file still supplies its layout, traces, vias and other rules. Your general routing options stay as you set them.</p>
+    <p class="previous-rules-note">Want this file's own choices? Use imported rules, close this dialog or press Escape.</p>
     <p id="previousRulesError" class="previous-rules-error" role="alert" hidden></p>
     <div class="previous-rules-actions"><button id="previousRulesImported" type="button">Use imported rules</button><button id="previousRulesReuse" type="button">Reuse previous rules</button></div>
   </dialog>
   <dialog id="netLayersDialog" class="net-layers-dialog" aria-labelledby="netLayersTitle" aria-describedby="netLayersDescription netLayersApplyNote">
     <div class="dialog-header"><span class="section-kicker">ROUTING RULES</span><button id="closeNetLayers" class="icon-button" type="button" aria-label="Cancel routing rule changes">×</button></div>
     <h2 id="netLayersTitle">Routing rules</h2>
-    <p id="netLayersDescription">Choose how RamenRouter works, then set any rules for individual nets. Changes take effect when you apply them.</p>
+    <p id="netLayersDescription">Choose how to route, then give individual nets their own rules if needed. Click Apply rules when you are ready.</p>
     <div class="routing-rule-tabs" role="tablist" aria-label="Routing rule sections"><button id="routingOptionsTab" type="button" role="tab" aria-controls="routingOptionsPanel" aria-selected="true">Routing options</button><button id="netRulesTab" type="button" role="tab" aria-controls="netRulesPanel" aria-selected="false" tabindex="-1">Net rules</button></div>
     <section id="routingOptionsPanel" role="tabpanel" aria-labelledby="routingOptionsTab">
       <form id="settingsForm">
         <div class="setting-block fanout-setting">
           <label class="switch-row" for="fanout"><span><strong>Ramen SMD escape</strong></span><span class="switch"><input type="checkbox" id="fanout" name="fanout" checked><span class="switch-track"></span></span></label>
-          <p>Prepare extra pad escapes around surface-mount components. Short connections needed to reach chosen main routing layers are prepared automatically, even when this option is off.</p>
+          <p>Give surface-mount pads extra short escapes to nearby vias before routing. Escapes needed to reach your chosen main layers are tried automatically, even with this off.</p>
           <label class="checkbox-row fanout-only" id="fanoutOnlyRow" hidden><input type="checkbox" id="fanoutOnly" name="fanoutOnly"><span>Pad escapes only · skip routing</span></label>
         </div>
-        <div class="setting-block optimize-setting"><label class="switch-row" for="optimize"><span><strong>Optimize after routing</strong></span><span class="switch"><input type="checkbox" id="optimize" name="optimize" checked><span class="switch-track"></span></span></label><p>Refine completed routes and reduce vias.</p></div>
-        <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Retry difficult nets and untangle the last few connections. Keep the best checked result.</p></div>
-        <div class="setting-block direction-setting"><label class="switch-row" for="preferredDirections"><span><strong>Prefer alternating layer directions</strong></span><span class="switch"><input type="checkbox" id="preferredDirections" name="preferredDirections"><span class="switch-track"></span></span></label><p>Favor vertical routes on one layer and horizontal routes on the next. Routes may bend or cross directions when needed; this is a preference, not a restriction.</p><p id="directionLayerPreview" class="direction-layer-preview"></p></div>
-        <div class="setting-block benchmark-setting"><label class="switch-row" for="benchmarkMode"><span><strong>Fixed-work benchmark</strong></span><span class="switch"><input type="checkbox" id="benchmarkMode" name="benchmarkMode"><span class="switch-track"></span></span></label><p>Use fixed search-work limits for fairer comparisons between computers. Use the same board and routing rules on both. The time limit still pauses the run; extend it until the job finishes.</p></div>
+        <div class="setting-block optimize-setting"><label class="switch-row" for="optimize"><span><strong>Optimize after routing</strong></span><span class="switch"><input type="checkbox" id="optimize" name="optimize" checked><span class="switch-track"></span></span></label><p>Tidy up completed routes and try to use fewer vias.</p></div>
+        <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Give tricky nets another go and try to untangle the last few connections. Keep the best checked result along the way.</p></div>
+        <div class="setting-block direction-setting"><label class="switch-row" for="preferredDirections"><span><strong>Prefer alternating layer directions</strong></span><span class="switch"><input type="checkbox" id="preferredDirections" name="preferredDirections"><span class="switch-track"></span></span></label><p>Prefer vertical routes on one layer and horizontal on the next. Routes can still bend when needed. Think of it as a preference, not a hard rule.</p><p id="directionLayerPreview" class="direction-layer-preview"></p></div>
+        <div class="setting-block benchmark-setting"><label class="switch-row" for="benchmarkMode"><span><strong>Fixed-work benchmark</strong></span><span class="switch"><input type="checkbox" id="benchmarkMode" name="benchmarkMode"><span class="switch-track"></span></span></label><p>Give difficult fanout searches the same work budget on each computer for a fairer comparison. Use the same board and rules on both. If time runs out, extend the run until it finishes.</p></div>
         <details class="advanced-rules"><summary>Advanced rules <span>1 OPTION</span></summary>
-          <div class="setting-block via-in-pad-setting"><label class="switch-row" for="viaInPad"><span><strong>Allow vias in SMD pads</strong></span><span class="switch"><input type="checkbox" id="viaInPad" name="viaInPad"><span class="switch-track"></span></span></label><p>Off keeps vias outside SMD pads; short pad traces can reach them when a layer change is needed. On permits vias inside pads without requiring them. Check fabrication suitability before enabling.</p></div>
+          <div class="setting-block via-in-pad-setting"><label class="switch-row" for="viaInPad"><span><strong>Allow vias in SMD pads</strong></span><span class="switch"><input type="checkbox" id="viaInPad" name="viaInPad"><span class="switch-track"></span></span></label><p>Off means fan out to a via outside the SMD pad when a layer change is needed. On allows a via inside the pad, without forcing one. Check that your board can be made that way before turning it on.</p></div>
         </details>
-        <p class="rule-policy"><span aria-hidden="true">✓</span> Imported net widths enforced</p>
-        <div class="number-settings"><label for="maxPasses">Routing attempts <input type="number" id="maxPasses" name="maxPasses" min="1" max="100" step="1" value="12" required><span>Includes repairs and fresh starts</span></label><label for="timeoutMinutes">Time limit <div class="number-unit"><input type="number" id="timeoutMinutes" name="timeoutMinutes" min="1" max="1440" step="1" value="30" required><span>min</span></div><span>Entire job</span></label></div>
+        <p class="rule-policy"><span aria-hidden="true">✓</span> Your imported trace widths still apply</p>
+        <div class="number-settings"><label for="maxPasses">Routing attempts <input type="number" id="maxPasses" name="maxPasses" min="1" max="100" step="1" value="12" required><span>Includes repairs and starting again</span></label><label for="timeoutMinutes">Time limit <div class="number-unit"><input type="number" id="timeoutMinutes" name="timeoutMinutes" min="1" max="1440" step="1" value="30" required><span>min</span></div><span>The whole run</span></label></div>
       </form>
     </section>
     <section id="netRulesPanel" role="tabpanel" aria-labelledby="netRulesTab" hidden>
-    <p id="netPadEscapeDescription"><strong>Layer checkboxes choose the main routing layers.</strong> When a pad is on another layer and vias inside SMD pads are off, the router tries a short, full-width trace to a nearby via outside the pad, then stays on the selected layers. Turn on the separate SMD-via option to permit vias inside pads. This access is automatic for imported and edited layer rules. With all layers selected, routing keeps its usual behavior. Clearances and other routing rules still apply.</p>
-    <p id="netShortDescription"><strong>Prefer shorter routes</strong> gives selected nets earlier access to space and favors shorter paths, even if that needs more vias. Completing connections and obeying board rules come first. This does not guarantee the shortest possible path or match trace lengths.</p>
-    <p class="net-layers-physical-note">Pads and through vias keep their physical layer spans. Selecting a layer here does not change the board’s construction.</p>
+    <p id="netPadEscapeDescription"><strong>Pick a main layer: get there, then stay there.</strong> If a pad is on another layer, RamenRouter tries a nearby via to reach your chosen layers. With SMD vias off, it uses a short, full-width escape to a via outside the pad. With them on, a via inside the pad is allowed too. These escapes are automatic for imported rules and your changes. Pick every layer and routing works as usual. Your other rules still apply.</p>
+    <p id="netShortDescription"><strong>Prefer shorter routes</strong> gives these nets earlier access to space and more attention to short paths, even if they need more vias. Finishing the connections and following your rules come first. It won't guarantee the shortest possible path or match trace lengths.</p>
+    <p class="net-layers-physical-note">Pads and through vias still span their actual layers. These choices don't change how the board is built.</p>
 
     <div class="net-layers-tools"><label for="netLayerSearch">Find a net<input id="netLayerSearch" type="search" placeholder="Search net names or USB*" aria-describedby="netLayerSearchHelp" autocomplete="off"></label><button id="resetAllNetLayers" type="button">Reset all to imported</button></div>
     <p class="net-layer-bulk-help" id="netLayerSearchHelp">Use <strong>*</strong> for any number of characters: <strong>USB*</strong> starts with USB, <strong>*CLK</strong> ends with CLK, <strong>*CLK*</strong> contains CLK. Plain text finds any part of a name.</p>
@@ -229,14 +229,14 @@
   <dialog id="copperDialog" class="copper-dialog" aria-labelledby="copperTitle" aria-describedby="copperDescription">
     <div class="dialog-header"><span class="section-kicker">COPPER WHERE YOU NEED IT</span><button id="closeCopper" class="icon-button" type="button" aria-label="Close copper fills">×</button></div>
     <h2 id="copperTitle">Copper fills</h2>
-    <p id="copperDescription">Build temporary copper areas to guide routing. Fill a layer or draw boundaries and cutouts. Use matching copper pours in your PCB editor to complete the plane connections.</p>
+    <p id="copperDescription">Let a copper plane do some of the work. Fill a layer or draw your own boundary and cutouts. These areas help route here; use matching copper pours in your PCB editor to make the actual plane connections.</p>
     <div class="copper-manager">
       <section class="copper-zone-list-panel" aria-label="Copper areas">
         <div class="copper-list-heading"><h3>Your copper areas</h3><span id="copperZoneCount">0</span></div>
         <div id="copperZoneList" class="copper-zone-list" role="list"></div>
         <input id="copperSettingsFileInput" type="file" accept=".json,application/json" hidden>
         <div class="copper-add-actions"><button id="addWholeCopper" type="button">Add whole-board fill</button><button id="addDrawnCopper" type="button">Draw a copper area</button><button id="loadCopperSettings" type="button">Load copper settings</button></div>
-        <p class="copper-helper">Changes apply together when you choose <strong>Apply &amp; rebuild</strong>. Loading a saved settings file rebuilds its areas on this board.</p>
+        <p class="copper-helper">Click <strong>Apply &amp; rebuild</strong> when you're ready. Loading a saved settings file rebuilds its areas on this board.</p>
       </section>
       <section id="copperEditor" class="copper-editor" aria-labelledby="copperEditTitle" hidden>
         <div class="copper-editor-heading"><h3 id="copperEditTitle">Area settings</h3><button id="deleteCopperZone" class="copper-delete-button" type="button">Delete area</button></div>
@@ -257,28 +257,28 @@
             <label class="copper-grid-field" hidden>Grid line width · mm<input id="copperGridWidth" type="number" min="0.000001" step="any" required></label>
           </div>
         </form>
-        <p class="copper-helper">Clearance follows the net’s imported rule as a minimum. Spokes leave a gap around pads and connect them through short copper bridges.</p>
+        <p class="copper-helper">Your imported net clearance is still the minimum. Spokes leave a gap around pads, then connect them with short copper bridges.</p>
         <section class="copper-shape-section" aria-label="Copper boundary"><div><h4>Boundary</h4><span id="copperBoundaryCount"></span></div><div class="copper-shape-actions"><button id="redrawCopperBoundary" type="button">Redraw boundary</button><button id="wholeCopperBoundary" type="button">Use board outline</button><button id="showCopperArea" type="button">Show on board</button></div></section>
-        <section class="copper-shape-section" aria-label="Areas without copper"><div><h4>Leave these areas clear</h4><button id="drawCopperCutout" type="button">Draw a cutout</button></div><div id="copperCutoutList" class="copper-cutout-list"></div><p class="copper-helper">Cutouts remove copper from this area only. Existing board keepouts and clearances are also respected.</p></section>
+        <section class="copper-shape-section" aria-label="Areas without copper"><div><h4>Leave these areas clear</h4><button id="drawCopperCutout" type="button">Draw a cutout</button></div><div id="copperCutoutList" class="copper-cutout-list"></div><p class="copper-helper">A cutout leaves this copper area clear. Your board's keepouts and clearances still apply.</p></section>
       </section>
-      <p id="copperEmpty" class="copper-empty">No copper areas yet. Start with a whole-board fill, then choose its layer and net.</p>
+      <p id="copperEmpty" class="copper-empty">No copper areas yet. Add a whole-board fill, then pick its layer and net.</p>
     </div>
-    <p id="copperTransferNote" class="copper-transfer-note">Temporary fills stay in RamenRouter. Exported DSN keeps only your file’s original copper; SES carries tracks and vias. Save a separate copper settings file to reuse these choices here. Use matching pours in your PCB editor, refill them and check connectivity before relying on plane connections.</p>
+    <p id="copperTransferNote" class="copper-transfer-note">The fills you add here stay in RamenRouter. DSN keeps only your file's original copper; SES carries tracks and vias. Save copper settings separately to use them here next time. Refill matching pours in your PCB editor and check the connections before relying on a plane.</p>
     <p id="copperError" class="copper-error" role="alert" hidden></p>
     <div class="copper-dialog-actions"><button id="cancelCopper" type="button">Cancel</button><button id="applyCopper" type="button">Apply &amp; rebuild</button></div>
   </dialog>
   <dialog id="copperExportDialog" class="copper-choice-dialog" aria-labelledby="copperExportTitle" aria-describedby="copperExportDescription">
-    <div class="dialog-header"><span class="section-kicker">KEEP YOUR ROUTING SETUP</span><button id="closeCopperExport" class="icon-button" type="button" aria-label="Cancel export">×</button></div>
+    <div class="dialog-header"><span class="section-kicker">KEEP YOUR COPPER SETTINGS</span><button id="closeCopperExport" class="icon-button" type="button" aria-label="Cancel export">×</button></div>
     <h2 id="copperExportTitle">Save your copper settings too?</h2>
-    <p id="copperExportDescription">These temporary copper areas helped route your board. Save their settings in a separate file so you can load them into RamenRouter next time.</p>
-    <p class="copper-transfer-note">Your exported DSN keeps only the copper that came with your original file. SES carries tracks and vias. In EasyEDA, use your matching copper pours, refill them and check connectivity. Routes that rely on a plane need that copper to make their connections.</p>
+    <p id="copperExportDescription">These copper areas helped route your board. Save their settings separately if you want to load them into RamenRouter next time.</p>
+    <p class="copper-transfer-note">DSN keeps the copper from your original file. SES carries tracks and vias. Back in EasyEDA, refill matching copper pours and check the connections. A route that uses a plane needs that copper to make the connection.</p>
     <div class="copper-choice-actions"><button id="saveCopperAndExport" type="button">Save settings &amp; export</button><button id="exportCopperRoutesOnly" type="button">Export routes only</button><button id="cancelCopperExport" type="button">Cancel</button></div>
   </dialog>
   <dialog id="copperLoadDialog" class="copper-choice-dialog" aria-labelledby="copperLoadTitle" aria-describedby="copperLoadDescription">
     <div class="dialog-header"><span class="section-kicker">USE YOUR SAVED SETUP</span><button id="closeCopperLoad" class="icon-button" type="button" aria-label="Keep current copper settings">×</button></div>
     <h2 id="copperLoadTitle">Load saved copper settings?</h2>
-    <p id="copperLoadDescription">If you saved copper settings for this board, choose that file to rebuild the same temporary areas in RamenRouter. Your PCB editor still supplies the final copper pours.</p>
-    <p class="copper-helper">Nothing is applied automatically. You can also load a settings file later from Copper fills.</p>
+    <p id="copperLoadDescription">Saved copper settings for this board? Choose that file to rebuild the areas here. Your PCB editor still supplies the actual copper pours.</p>
+    <p class="copper-helper">Nothing is loaded automatically. You can also load the file later from Copper fills.</p>
     <div class="copper-choice-actions"><button id="loadPreviousCopper" type="button">Choose settings file</button><button id="skipPreviousCopper" type="button">Start without saved settings</button></div>
   </dialog>
   <dialog id="clearRoutingDialog" class="clear-routing-dialog" aria-labelledby="clearRoutingTitle" aria-describedby="clearRoutingDescription clearRoutingFixed clearRoutingPreserved">
@@ -287,8 +287,8 @@
     <p class="clear-routing-filename" id="clearRoutingFileName"></p>
     <p id="clearRoutingDescription">Remove <strong id="clearRoutingCounts"></strong> from the loaded board.</p>
     <p class="clear-routing-fixed" id="clearRoutingFixed" hidden></p>
-    <p id="clearRoutingPreserved">Components, pads, connections, copper areas, board outline and design rules stay in place. Copper areas are rebuilt. Your original DSN file on disk is unchanged.</p>
-    <p>Download any result you want to keep first. Routing will stay stopped until you choose <strong>Start routing</strong>.</p>
+    <p id="clearRoutingPreserved">Your components, pads, connections, copper areas, board outline and rules stay in place. Copper areas are rebuilt. Your original DSN file stays as it is.</p>
+    <p>Download any result you want to keep first. Nothing starts again until you click <strong>Start routing</strong>.</p>
     <div class="clear-routing-actions"><button id="cancelClearRouting" type="button" autofocus>Cancel</button><button id="confirmClearRouting" type="button">Clear all routing</button></div>
   </dialog>
   <dialog id="aboutDialog"><div class="dialog-header"><span class="section-kicker">ABOUT RAMENROUTER</span><button id="closeAbout" class="icon-button" aria-label="Close about dialog">×</button></div><h2>Load your board.<br>Let it cook.</h2><p>I built RamenRouter because I want to squeeze more onto a small PCB without paying for extra layers, finer traces or smaller holes. If making it fit and work matters more than making it pretty, this is for you.</p><p>Export a DSN from your PCB editor, load it here and click Start routing. Download the SES result and import it back into the same editor.</p><p>Want a copper plane to do some of the work? Add it here, then use matching copper pours in your PCB editor and refill them. The temporary fills you add in RamenRouter stay here; save their settings separately if you want to use them next time.</p><div class="about-callout"><strong>Just open it and get started.</strong><p>Download the whole folder and double-click index.html. Keep the files together. Your board stays on your computer, and the downloaded app works without an internet connection.</p></div><p class="about-small">The GPL-3.0 source and required notices are included in this folder. The preview simplifies some board geometry, so check your exported board in your PCB editor before ordering it.</p><button id="closeAboutBottom" class="primary-button">Back to the board</button></dialog>

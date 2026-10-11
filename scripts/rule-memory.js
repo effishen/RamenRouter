@@ -9,7 +9,7 @@ function createRamenRuleMemory() {
   const exactKeys=(value,keys)=>plain(value)&&Object.keys(value).length===keys.length&&keys.every(key=>own(value,key));
   const bytes=value=>new TextEncoder().encode(value).byteLength;
   const same=(a,b)=>a.length===b.length&&a.every((value,index)=>value===b[index]);
-  function invalid(){throw new Error('Saved routing rules are not valid.');}
+  function invalid(){throw new Error('These saved routing rules are invalid. Use the imported rules or set them again.');}
   function validateProfile(input) {
     if(typeof input==='string'){if(input.length>MAX_BYTES||bytes(input)>MAX_BYTES)invalid();try{input=JSON.parse(input);}catch(_){invalid();}}
     if(!exactKeys(input,['schema','version','matchFingerprint','sourceName','layers','nets'])||input.schema!==SCHEMA||input.version!==1||!hash(input.matchFingerprint)||typeof input.sourceName!=='string'||input.sourceName.length>160||/[\x00-\x1f\x7f]/.test(input.sourceName))invalid();
@@ -31,7 +31,7 @@ function createRamenRuleMemory() {
     records.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
     const value=JSON.stringify({schema:'ramenrouter-rule-topology-v1',layers:layerNames,nets:records});return bytes(value)<=4*1024*1024?value:null;
   }
-  async function fingerprintBoard(board,hashText){const value=topology(board);if(value===null)return null;if(typeof hashText!=='function')throw new Error('A SHA-256 implementation is required.');const valueHash=await hashText(value);return hash(valueHash)?valueHash:null;}
+  async function fingerprintBoard(board,hashText){const value=topology(board);if(value===null)return null;if(typeof hashText!=='function')throw new Error('The board-matching check is unavailable. Use the imported routing rules for this board.');const valueHash=await hashText(value);return hash(valueHash)?valueHash:null;}
   function makeProfile(board,matchFingerprint,sourceName='') {
     if(!hash(matchFingerprint))return null;
     try {

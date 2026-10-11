@@ -76,7 +76,7 @@
   let drawQueued = false;
 
   const icons = { ready: '○', completed: '✓', stopped: 'Ⅱ', paused: 'Ⅱ', pausing: '◷', timed_out: '◷', error: '!', failed: '!' };
-  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing routing', updating_rules: 'Updating routing rules', updating_copper: 'Building copper fills', starting: 'Starting engine', running: 'Routing in progress', routing: 'Routing in progress', fanout: 'Fanout in progress', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Job complete', stopped: 'Job stopped', timed_out: 'Time limit reached', error: 'Job needs attention', failed: 'Job needs attention', idle: 'Ready when you are' };
+  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing traces and vias', updating_rules: 'Updating routing rules', updating_copper: 'Building copper fills', starting: 'Getting started', running: 'Routing your board', routing: 'Routing your board', fanout: 'Adding pad escapes', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Run complete', stopped: 'Run stopped', timed_out: 'Time limit reached', error: 'This run needs a look', failed: 'This run needs a look', idle: 'Ready when you are' };
 
   function toast(message, error = false) {
     clearTimeout(toastTimer);
@@ -87,7 +87,7 @@
   }
 
   async function api(path, options = {}) {
-    if (!nativeEngine || typeof nativeEngine.request !== 'function') throw new Error('The browser engine did not load. Keep all folder files together and reopen index.html.');
+    if (!nativeEngine || typeof nativeEngine.request !== 'function') throw new Error('RamenRouter did not load. Keep the folder together, then reopen index.html.');
     return await nativeEngine.request(path, options);
   }
 
@@ -102,7 +102,7 @@
   function setConnection(value) {
     connected = value;
     $('connection').className = `connection ${value ? 'connected' : 'disconnected'}`;
-    $('connectionText').textContent = value ? 'Runs entirely offline' : 'Browser engine unavailable';
+    $('connectionText').textContent = value ? 'Works offline' : 'RamenRouter is not ready';
     $('disconnectBanner').hidden = value;
     updateControls();
     syncActivityVisual();
@@ -119,7 +119,7 @@
     return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
   }
 
-  function phaseName(phase) { return ({ reading: 'Reading board data', checking: 'Checking routing rules', advising: 'Preparing placement advice', exporting: 'Preparing exports', rasterizing: 'Preparing copper and clearance grid', loading: 'Loading board', routing: 'Routing connections', fanout: 'Preparing pad escapes', optimizing: 'Refining routes', deep_search: 'Smart search', pad_escape: 'Pad-via escape', finishing: 'Finishing remaining connections', updating_rules: 'Updating routing rules', copper_fill: 'Building and checking copper fills' })[phase] || phase; }
+  function phaseName(phase) { return ({ reading: 'Reading your board', checking: 'Checking routing rules', advising: 'Looking for placement changes that may help', exporting: 'Getting your exports ready', rasterizing: 'Mapping copper and clearances', loading: 'Loading your board', routing: 'Connecting pads', fanout: 'Finding room for pad escapes', optimizing: 'Refining routes', deep_search: 'Trying different routes', pad_escape: 'Finding a way out of the pads', finishing: 'Working on the remaining connections', updating_rules: 'Updating routing rules', copper_fill: 'Building copper fills and checking connections' })[phase] || phase; }
 
   function isActive() { return Boolean(currentState?.job && activeStates.has(currentState.job.state)); }
   function awaitingMoreTime(job = currentState?.job) { return job?.operation === 'run' && ['pausing', 'paused'].includes(job.state); }
@@ -147,10 +147,10 @@
     }
     $('previousRulesOldName').textContent = proposal.previousName || 'Previous board';
     $('previousRulesNewName').textContent = proposal.currentName || 'Imported board';
-    $('previousRulesCount').textContent = `${number(proposal.changedNets)} matching ${proposal.changedNets === 1 ? 'net has' : 'nets have'} different saved layer or shorter-route choices.`;
+    $('previousRulesCount').textContent = `${number(proposal.changedNets)} matching ${proposal.changedNets === 1 ? 'net has' : 'nets have'} different saved routing rules.`;
     const error = previousRulesError || job.ruleError;
     $('previousRulesError').hidden = !error;
-    $('previousRulesError').textContent = error ? `Previous rules have not been applied. ${error}` : '';
+    $('previousRulesError').textContent = error ? `Your previous rules were not applied. ${error}` : '';
     const waiting = Boolean(previousRulesAction);
     dialog.setAttribute('aria-busy', String(waiting));
     for (const id of ['previousRulesReuse', 'previousRulesImported', 'closePreviousRules']) $(id).disabled = !connected || busy || waiting;
@@ -169,10 +169,10 @@
     previousRulesError = ''; busy = true; updateControls();
     try {
       const state = await api('/api/reuse-routing-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: job.id, proposalId: proposal.id, reuse }) });
-      if (!state?.job) throw new Error('The engine did not confirm your choice. Please try again.');
+      if (!state?.job) throw new Error('Could not confirm your choice. Try again.');
       applyState(state);
       if (!state.job.previousRulesProposal) $('previousRulesDialog').close();
-      toast(reuse ? 'Reusing previous routing rules. Checking the new board…' : 'Using the routing rules from your imported board.');
+      toast(reuse ? 'Previous rules loaded. Checking your new board…' : 'Using the rules from the board you just loaded.');
     } catch (error) {
       if (currentState?.job?.id === job.id && currentState.job.previousRulesProposal?.id === proposal.id) previousRulesError = error.message || String(error);
       else toast(error.message || String(error), true);
@@ -189,14 +189,14 @@
     $('stopButton').hidden = !active;
     $('runButton').disabled = !available || !job || job.state === 'idle' || active || previousRulesPending;
     $('stopButton').disabled = !available || stopping;
-    $('stopButton').lastChild.textContent = stopping ? ' Stopping…' : 'Stop job';
+    $('stopButton').lastChild.textContent = stopping ? ' Stopping…' : 'Stop routing';
     $('forceStopButton').hidden = !stopping || !stoppingSince || Date.now() - stoppingSince < 5000;
     $('forceStopButton').disabled = !available || forcedStop;
     for (const id of ['dropzone', 'replaceButton', 'demoButton']) $(id).disabled = !available || active || previousRulesPending;
     const routing = job?.routingSummary;
     $('clearRoutingButton').hidden = !job || job.state === 'idle';
     $('clearRoutingButton').disabled = !available || active || previousRulesPending || !routing || routing.traceCount + routing.viaCount === 0;
-    $('clearRoutingButton').title = routing && routing.traceCount + routing.viaCount === 0 ? 'There are no traces or routing vias to clear.' : 'Remove all traces and routing vias from the loaded board.';
+    $('clearRoutingButton').title = routing && routing.traceCount + routing.viaCount === 0 ? 'There are no traces or routing vias to clear yet.' : 'Clear every trace and routing via from this board.';
     $('confirmClearRouting').disabled = !available || active || job?.id !== clearRoutingJobId;
     if ($('clearRoutingDialog').open && (job?.id !== clearRoutingJobId || active)) $('clearRoutingDialog').close();
     $('netLayersSetting').hidden = !job || job.state === 'idle';
@@ -208,10 +208,10 @@
     const layerSummary = job?.routingRuleSummary || job?.layerRuleSummary;
     const savedOptions = routingOptionsBeforeDialog || readRoutingOptions();
     const optionSummary = `${number(savedOptions.maxPasses)} attempts · ${number(savedOptions.timeoutMinutes)} min${savedOptions.preferredDirections ? ' · alternating directions' : ''}${savedOptions.benchmarkMode ? ' · fixed-work benchmark' : ''}`;
-    $('netLayersSummary').textContent = optionSummary + (layerSummary ? ` · ${number(layerSummary.restrictedNets)} layer-limited nets · ${number(layerSummary.shortRouteNets || 0)} prefer shorter routes` : '');
+    $('netLayersSummary').textContent = optionSummary + (layerSummary ? ` · ${number(layerSummary.restrictedNets)} nets with layer limits · ${number(layerSummary.shortRouteNets || 0)} prefer shorter routes` : '');
     const layerConflicts = layerSummary?.conflictingTraces || 0;
     $('netLayerConflict').hidden = !layerConflicts || active;
-    $('netLayerConflict').textContent = layerConflicts ? `${number(layerConflicts)} existing ${layerConflicts === 1 ? 'trace uses' : 'traces use'} an unselected layer without qualifying as a permitted short pad escape. Use “Clear routing & start over” to remove existing routes, or revise the net layer rules.` : '';
+    $('netLayerConflict').textContent = layerConflicts ? `${number(layerConflicts)} existing ${layerConflicts === 1 ? 'trace uses' : 'traces use'} a layer you have not selected, and cannot count as a short pad escape. Choose “Clear routing & start over”, or change the allowed layers.` : '';
     updateNetLayerDraftStatus();
     for (const control of $('settingsForm').elements) control.disabled = !available || active;
     if (available && !active) {
@@ -223,7 +223,7 @@
     const fanoutOnlyMode = $('fanout').checked && $('fanoutOnly').checked;
     const smartMode = $('deepSearch').checked && !fanoutOnlyMode;
     $('routingModeName').textContent = fanoutOnlyMode ? 'Ramen SMD escape' : (smartMode ? 'Ramen smart routing' : 'Ramen direct routing');
-    $('routingModeDetail').textContent = fanoutOnlyMode ? 'Prepare pad escapes without routing.' : (smartMode ? 'Search across multiple routing attempts.' : 'A single routing attempt in your browser.');
+    $('routingModeDetail').textContent = fanoutOnlyMode ? 'Add pad escapes, then stop before routing the rest.' : (smartMode ? 'Try different routes and keep the best checked result.' : 'Try one routing attempt.');
     $('routingModeTag').textContent = fanoutOnlyMode ? 'FANOUT' : (smartMode ? 'SMART' : 'DIRECT');
     $('downloadSes').disabled = !connected || !outputAvailable('ses') || active;
     $('downloadDsn').disabled = !connected || !outputAvailable('dsn') || active;
@@ -232,17 +232,17 @@
     $('downloadLog').disabled = !connected || !job;
     $('copyLog').disabled = !lastLogs;
     $('runLabel').textContent = $('fanout').checked && $('fanoutOnly').checked ? 'Run SMD escape' : (job && terminalStates.has(job.state) ? 'Route again' : 'Start routing');
-    let hint = !job ? 'Load a board to begin.' : (active ? 'Routing in a local browser worker.' : (job.routingCleared ? 'Runs from the cleared input board.' : 'Runs from the original input board.'));
-    if (!active && job?.copperSummary?.zoneCount) hint = 'Routes from your loaded board with its copper areas.';
+    let hint = !job ? 'Load a board to get started.' : (active ? 'Working on your board. Let it cook.' : (job.routingCleared ? 'Your next run starts with the cleared board.' : 'Your next run starts with the board you loaded.'));
+    if (!active && job?.copperSummary?.zoneCount) hint = 'Your next run uses this board and its copper areas.';
     if (job?.state === 'clearing') hint = 'Removing routes and checking your board…';
-    if (job?.state === 'updating_rules') hint = 'Applying net layers and checking your input board…';
+    if (job?.state === 'updating_rules') hint = 'Applying your layer choices and checking the board…';
     if (job?.state === 'updating_copper') hint = 'Building copper fills and checking their connections…';
     if (copperDrawing) hint = 'Draw your copper shape, then choose Finish shape.';
     if (busy) hint = 'Preparing your board…';
-    if (previousRulesPending) hint = 'Choose whether to reuse your previous routing rules before starting.';
-    if (stopping) hint = forcedStop ? 'Force stop requested.' : 'Finishing the current operation…';
-    if (awaitingMoreTime(job)) hint = job.state === 'paused' ? 'Extend the time to continue this run, or stop.' : 'Reaching a safe pause point. You can extend now.';
-    if (!connected) hint = 'Waiting for the browser engine.';
+    if (previousRulesPending) hint = 'Choose your routing rules before starting.';
+    if (stopping) hint = forcedStop ? 'Stopping now…' : 'Finishing this step, then stopping…';
+    if (awaitingMoreTime(job)) hint = job.state === 'paused' ? 'Extend the time to continue this run, or stop.' : 'Finishing this step before pausing. You can add time now.';
+    if (!connected) hint = 'Waiting for RamenRouter to get ready.';
     $('runHint').textContent = hint;
     updateStoppedFeedback();
     updateBudgetFeedback();
@@ -298,10 +298,10 @@
     }
     $('timeBudgetTitle').textContent = job.state === 'paused' ? 'Continue this run?' : 'Time limit reached';
     $('timeBudgetDetail').textContent = job.state === 'paused'
-      ? 'Your work is paused in place, including any board preparation. Extend the time to continue exactly where it paused, or stop.'
-      : 'Pausing at the next safe point. Extend now to keep this run going, including any board preparation already in progress.';
-    $('finishTimedRun').textContent = job.bestResult?.available ? 'Keep best & stop' : 'Stop job';
-    $('timeBudgetStopDetail').textContent = job.bestResult?.available ? 'Stopping keeps the best checked result for review and export.' : 'No checked result is available yet. Stopping ends this run.';
+      ? 'Your work is paused, including any board preparation. Add time to pick up where it stopped, or end this run.'
+      : 'Finishing this step before pausing. Add time to keep going, including any board preparation already underway.';
+    $('finishTimedRun').textContent = job.bestResult?.available ? 'Keep best & stop' : 'Stop routing';
+    $('timeBudgetStopDetail').textContent = job.bestResult?.available ? 'Stop here and keep the best checked result to review or export.' : 'There is no checked result yet. Stop here to end this run.';
     const key = `budget:${job.id}:${job.budgetGeneration || 0}`;
     if (announcedBudgetKey !== key) {
       announcedBudgetKey = key;
@@ -318,7 +318,7 @@
     busy = true; updateControls();
     try {
       await post('/api/extend', { jobId: job.id, timeoutMinutes });
-      toast(`Added ${number(timeoutMinutes)} ${timeoutMinutes === 1 ? 'minute' : 'minutes'}. Continuing the same run.`);
+      toast(`Added ${number(timeoutMinutes)} ${timeoutMinutes === 1 ? 'minute' : 'minutes'}. Picking up the same run.`);
     } catch (error) { toast(error.message, true); }
     finally { busy = false; updateControls(); }
   }
@@ -350,10 +350,10 @@
     if (!show) return;
     const count = job.bestResult?.unrouted ?? job.stats?.unrouted;
     const remaining = Number.isFinite(count) ? `${number(count)} ${count === 1 ? 'connection remains' : 'connections remain'}.` : '';
-    let detail = available ? (job.bestResult.fromInput ? `The best checked result is still your ${job.routingCleared ? 'cleared input board' : 'original board'}. ${remaining}` : `The best checked result is saved. ${remaining}`) : 'Routing has stopped. No checked result was available yet. You can start a new run when ready.';
+    let detail = available ? (job.bestResult.fromInput ? `The best checked result is your ${job.routingCleared ? 'cleared board' : 'loaded board'}. ${remaining}` : `Your best checked result is saved. ${remaining}`) : 'Routing stopped before a checked result was ready. Start another run when you are ready.';
     const issues = job.stats?.totalViolations ?? job.stats?.clearanceViolations;
     if (available && issues > 0) detail += ` ${number(issues)} ${issues === 1 ? 'rule issue needs' : 'rule issues need'} review.`;
-    if (available) detail += ' View it to inspect any missing routes and available advice. Routing will stay stopped.';
+    if (available) detail += ' Open it to see the missing routes and any advice. This will not restart routing.';
     if ($('stopResultDetail').textContent !== detail) $('stopResultDetail').textContent = detail;
     if (announcedStopJobId !== job.id) {
       clearTimeout(toastTimer); $('toast').hidden = true;
@@ -374,7 +374,7 @@
     $('showPads').checked = true;
     for (const layer of board.layers || []) visibleLayers.set(layerKey(layer.id), true);
     updateLayers(); fitBoard(); updateControls();
-    $('canvasLabelText').textContent = job.bestResult.fromInput ? (job.routingCleared ? 'Cleared input board · routing stopped' : 'Original checked board · routing stopped') : 'Best checked result · routing stopped';
+    $('canvasLabelText').textContent = job.bestResult.fromInput ? (job.routingCleared ? 'Cleared board · routing stopped' : 'Loaded board · routing stopped') : 'Best checked result · routing stopped';
     const target = !$('remainingRoutes').hidden ? $('remainingRoutes') : (!$('placementAdvice').hidden ? $('placementAdvice') : $('jobState'));
     target.scrollIntoView({ block: 'start' });
     if (window.innerWidth > 900) canvas.scrollIntoView({ block: 'nearest' });
@@ -423,7 +423,7 @@
     $('downloadSes').classList.toggle('export-ready', show);
     $('downloadDsn').classList.remove('export-ready');
     $('downloadCopper').classList.toggle('export-ready', show && withCopper && downloadedCopperJobId !== job.id);
-    $('exportReadyMessage').textContent = withCopper ? 'Routes are ready. Use matching copper pours in your PCB editor, and save the separate copper settings if you want to reuse them here.' : 'All connections routed. Your routing session is ready to export.';
+    $('exportReadyMessage').textContent = withCopper ? 'Routes are ready. Refill matching copper pours in your PCB editor. Save the copper settings separately if you want to use them here again.' : 'All connected. Your routes are ready to export.';
     $('exportReadyMessage').hidden = !show;
     if (show && announcedExportJobId !== job.id) {
       clearTimeout(toastTimer); $('toast').hidden = true;
@@ -446,7 +446,7 @@
     $('dismissViaSuggestion').disabled = busy;
     if (!show) return;
     const job = currentState.job, count = job.stats.unrouted;
-    $('viaSuggestionDetail').textContent = `${number(count)} ${count === 1 ? 'connection remains' : 'connections remain'}. Vias in surface-mount pads may offer another path.`;
+    $('viaSuggestionDetail').textContent = `${number(count)} ${count === 1 ? 'connection remains' : 'connections remain'}. Allowing vias in SMD pads may give those connections another way through.`;
     if (announcedSuggestionJobId !== job.id) {
       announcedSuggestionJobId = job.id;
       requestAnimationFrame(() => { if (!$('viaSuggestion').hidden) $('viaSuggestion').scrollIntoView({ block: 'nearest' }); });
@@ -466,7 +466,7 @@
     $('dismissDirectionSuggestion').disabled = busy;
     if (show) {
       const count = currentState.job.stats.unrouted;
-      $('directionSuggestionDetail').textContent = `${number(count)} ${count === 1 ? 'connection remains' : 'connections remain'} after routing with alternating layer directions preferred. You can turn this preference off and try another run.`;
+      $('directionSuggestionDetail').textContent = `${number(count)} ${count === 1 ? 'connection remains' : 'connections remain'} with alternating layer directions on. Try another run with that preference off.`;
     }
   }
 
@@ -498,7 +498,7 @@
     if (key !== adviceRenderKey) {
       adviceRenderKey = key;
       $('placementLabelNote').hidden = !advice.limitedComponentLabels;
-      $('placementLabelDetail').textContent = advice.note || 'This DSN does not include the original component labels. Use the pad, net and location shown below.';
+      $('placementLabelDetail').textContent = advice.note || 'This DSN is missing the original component labels. Use the pad, net and location below to find the area.';
       const container = $('placementAdviceItems');
       container.replaceChildren();
       for (const [index, item] of items.entries()) {
@@ -508,11 +508,11 @@
         card.open = index === 0;
         const heading = document.createElement('summary');
         const numeral = document.createElement('span'); numeral.className = 'advice-item-number'; numeral.textContent = String(index + 1);
-        const title = document.createElement('span'); title.textContent = item.title || 'Review this area';
+        const title = document.createElement('span'); title.textContent = item.title || 'Take a look here';
         heading.append(numeral, title);
         const body = document.createElement('div'); body.className = 'advice-finding-body';
         const marker = document.createElement('span'); marker.className = 'advice-certainty' + (item.kind === 'existing_short' ? ' confirmed' : '');
-        marker.textContent = item.kind === 'existing_short' ? 'Confirmed source issue' : 'Possible improvement';
+        marker.textContent = item.kind === 'existing_short' ? 'Confirmed issue in your board' : 'Something to try';
         body.append(marker);
         const references = [];
         if (item.component && !advice.limitedComponentLabels) references.push(String(item.component));
@@ -581,12 +581,12 @@
     $(id + 'Value').textContent = number(value, digits);
     const detail = $(id + 'Change');
     detail.classList.remove('improved');
-    if (typeof value !== 'number') detail.textContent = currentState?.job ? 'Awaiting engine' : 'No board loaded';
+    if (typeof value !== 'number') detail.textContent = currentState?.job ? 'Waiting for a result' : 'No board loaded';
     else if (typeof initial === 'number' && initial !== value) {
       const difference = value - initial;
       detail.textContent = `${difference > 0 ? '+' : '−'}${number(Math.abs(difference), digits)}${unit ? ' ' + unit : ''} from input`;
       detail.classList.toggle('improved', difference < 0);
-    } else detail.textContent = 'From board data';
+    } else detail.textContent = 'From your board';
   }
 
   function applyStats(job) {
@@ -597,11 +597,11 @@
     stat('traces', stats.traceLengthMm, initial.traceLengthMm, 'mm');
     const clearances = stats.totalViolations ?? stats.clearanceViolations;
     $('connectionsValue').textContent = number(Array.isArray(clearances) ? clearances.length : clearances);
-    $('connectionsChange').textContent = clearances === null || clearances === undefined ? 'Final check pending' : (stats.drcChecked ? 'Clearance + placement checks' : 'Engine reported');
+    $('connectionsChange').textContent = clearances === null || clearances === undefined ? 'Final check pending' : (stats.drcChecked ? 'Clearance + placement checks' : 'Reported so far');
     $('connectionsChange').classList.toggle('improved', clearances === 0 && stats.drcChecked);
     $('widthValue').textContent = number(stats.belowNominalWidthTraceCount);
     $('widthValue').classList.toggle('width-warning', stats.belowNominalWidthTraceCount > 0);
-    $('widthDetail').textContent = stats.widthRulesChecked ? 'Trace items · per-net width check' : 'Check pending';
+    $('widthDetail').textContent = stats.widthRulesChecked ? 'Traces checked against each net’s width rule' : 'Check pending';
   }
 
   function updatePhases(job) {
@@ -648,7 +648,7 @@
       status: 'interrupted'
     };
     if (status === 'pending' && completed > 0) return { value: String(completed), detail: `${noun}${completed === 1 ? '' : 's'} completed${notStarted === null ? '' : ' · up to ' + number(notStarted) + ' more if needed'}`, status };
-    if (!current) return { value: attempt ? 'Preparing' : 'Not started', detail: limit === null ? 'Waiting for engine counters' : `Up to ${number(limit)} ${noun}${limit === 1 ? '' : 's'} available`, status };
+    if (!current) return { value: attempt ? 'Preparing' : 'Not started', detail: limit === null ? 'Waiting for the first count' : `Up to ${number(limit)} ${noun}${limit === 1 ? '' : 's'} available`, status };
     return { value: `${current}${limit === null ? '' : ' / ' + limit}`, detail: notStarted === null ? `${number(completed)} completed` : (notStarted === 0 ? `Last available ${noun}` : `Up to ${number(notStarted)} more after this`), status };
   }
 
@@ -676,13 +676,13 @@
     else if (Number.isFinite(job.remainingSeconds)) left = Math.max(0, job.remainingSeconds);
     else if (Number.isFinite(job.deadlineAt) && Number.isFinite(job.endedAt)) left = Math.max(0, (job.deadlineAt - job.endedAt) / 1000);
     progressText('timeLeftValue', left === null ? '—' : seconds(Math.ceil(left)));
-    progressText('timeLeftDetail', ended ? 'Unused time when the job ended' : (waiting ? (job.state === 'paused' ? 'Paused · choose more time or stop' : 'Reaching a safe pause point') : (left === 0 ? 'Time limit reached · pausing' : 'Time limit · not a finish estimate')));
+    progressText('timeLeftDetail', ended ? 'Time left when this run ended' : (waiting ? (job.state === 'paused' ? 'Paused · choose more time or stop' : 'Finishing this step before pausing') : (left === 0 ? 'Time limit reached · pausing' : 'Time allowed for this run')));
     $('timeLeftProgress').classList.toggle('time-low', running && left !== null && left <= 60);
     if (Number.isFinite(job.startedAt) && (!ended || Number.isFinite(job.endedAt))) progressText('elapsedValue', seconds(Math.max(0, ((ended ? job.endedAt : (Number.isFinite(job.pausedAt) ? job.pausedAt : Date.now())) - job.startedAt - (job.pausedDurationMs || 0)) / 1000)));
     const work = job.counters?.work;
     let detail = '';
     if (work && running) {
-      const labels = { traces: 'Traces reviewed', vias: 'Vias reviewed', checking: 'Checking geometry' };
+      const labels = { traces: 'Traces reviewed', vias: 'Vias reviewed', checking: 'Checking copper shapes' };
       detail = labels[work.kind] || '';
       if (detail && Number.isFinite(work.total) && work.total > 0 && Number.isFinite(work.processed)) detail += ` · ${number(work.processed)} / ${number(work.total)}`;
     }
@@ -701,12 +701,12 @@
     document.querySelector('.activity-panel').classList.toggle('has-live-activity', active);
     if (active) {
       const waiting = awaitingMoreTime(job);
-      const message = waiting ? (job.state === 'paused' ? 'Paused at the time limit. Extend time to continue this same operation, or stop.' : 'Time limit reached. Pausing at the next safe point; you can extend the time now.') : (job?.activity?.message || (job?.state === 'stopping' ? 'Waiting for the current operation to stop safely.' : 'Waiting for the next engine update.'));
+      const message = waiting ? (job.state === 'paused' ? 'Time is up. Add time to continue where this run paused, or stop here.' : 'Time is up. Finishing this step before pausing. You can add time now.') : (job?.activity?.message || (job?.state === 'stopping' ? 'Finishing this step, then stopping.' : 'Working on the next step.'));
       if ($('engineActivityMessage').textContent !== message) $('engineActivityMessage').textContent = message;
       const age = Number.isFinite(job.lastEngineUpdateAt) ? Math.max(0, Math.floor((Date.now() - job.lastEngineUpdateAt) / 1000)) : null;
-      $('engineActivityAge').textContent = waiting ? (job.state === 'paused' ? 'Work retained · waiting for your choice' : 'Finishing the current step before pausing') : (age === null ? 'Waiting for the first engine update' : (age < 2 ? 'Engine updated just now' : `Last engine update ${number(age)} s ago`));
+      $('engineActivityAge').textContent = waiting ? (job.state === 'paused' ? 'Work kept · add time or stop here' : 'Finishing the current step before pausing') : (age === null ? 'Waiting for the first routing update' : (age < 2 ? 'Updated just now' : `Last routing update ${number(age)} s ago`));
       $('engineActivity').classList.toggle('awaiting-update', !waiting && (age === null || age >= 10));
-      $('engineActivityAge').title = !waiting && age !== null && age >= 10 ? 'The current operation has not reported a new update yet. You can still use Stop job.' : '';
+      $('engineActivityAge').title = !waiting && age !== null && age >= 10 ? 'This step has not sent another update yet. You can still choose Stop routing.' : '';
     }
     receiveSpatialActivity(job);
     syncActivityVisual();
@@ -729,23 +729,23 @@
       }
     }
     if (previousJob?.state === 'updating_copper' && job?.state !== 'updating_copper') {
-      if (job?.copperError) toast(`Copper changes could not be applied. ${job.copperError}`, true);
-      else if (job?.copperSummary) toast('Copper rebuilt. Review the areas and remaining connections before routing.');
+      if (job?.copperError) toast(`Could not apply your copper changes. ${job.copperError}`, true);
+      else if (job?.copperSummary) toast('Copper rebuilt. Take a look at the areas and missing connections before routing.');
     }
     if (previousJob?.state === 'clearing' && job?.state !== 'clearing') {
       if (job?.id === previousJob.id && job.state === 'ready' && job.routingCleared) {
         $('showAirwires').checked = true;
         $('showPads').checked = true;
-        toast('Routing cleared. Review the missing connections, then choose Start routing.');
-      } else if (job?.clearError) toast(`Routing could not be cleared. Your previous board and results are kept. ${job.clearError}`, true);
-      else toast('Clearing cancelled. Your previous board and results are kept.');
+        toast('Traces and routing vias cleared. Check the missing connections, then choose Start routing.');
+      } else if (job?.clearError) toast(`Could not clear the routing. Your board and results are still here. ${job.clearError}`, true);
+      else toast('Clear cancelled. Your board and results are still here.');
     }
     if (previousJob?.state === 'updating_rules' && job?.state !== 'updating_rules') {
       if (job?.id === previousJob.id && job.state === 'ready') {
         $('showAirwires').checked = true;
-        toast('Routing rules applied. Review your input board, then choose Start routing.');
-      } else if (job?.ruleError) toast(`Routing rules could not be applied. Your previous board and results are kept. ${job.ruleError}`, true);
-      else toast('Routing rule changes cancelled. Your previous board and results are kept.');
+        toast('Rules applied. Check your board, then choose Start routing.');
+      } else if (job?.ruleError) toast(`Could not apply your rules. Your board and results are still here. ${job.ruleError}`, true);
+      else toast('Rule changes cancelled. Your board and results are still here.');
     }
     const hasJob = Boolean(job && job.state !== 'idle');
     const active = isActive();
@@ -761,18 +761,18 @@
     if (hasJob) {
       $('fileName').textContent = job.name || 'Untitled board';
       $('fileName').title = job.name || 'Untitled board';
-      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading design…' : (job.state === 'clearing' ? 'Clearing routing…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.state === 'updating_copper' ? 'Building copper fills…' : (job.routingCleared ? 'Cleared input DSN' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'Input DSN · edited routing rules' : (job.copperSummary?.zoneCount ? 'DSN · copper areas added' : 'Original DSN loaded'))))));
+      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading your board…' : (job.state === 'clearing' ? 'Clearing traces and vias…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.state === 'updating_copper' ? 'Building copper fills…' : (job.routingCleared ? 'DSN · traces and routing vias cleared' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'DSN · your routing rules applied' : (job.copperSummary?.zoneCount ? 'DSN · copper areas added' : 'Your DSN is loaded'))))));
       document.title = `${job.name || 'Board'} · RamenRouter`;
     }
     const completedWithRuleIssues = job?.state === 'completed' && (job.stats?.totalViolations ?? job.stats?.clearanceViolations ?? 0) > 0;
-    $('stateTitle').textContent = job?.state === 'completed' && job.stats?.unrouted > 0 ? 'Connections remain' : (completedWithRuleIssues ? 'Review rule issues' : (labels[job?.state] || (job?.state ? job.state : 'Ready when you are')));
-    $('phaseLabel').textContent = phaseName(job?.phase) || (hasJob ? 'Choose settings and start routing' : 'No active job');
+    $('stateTitle').textContent = job?.state === 'completed' && job.stats?.unrouted > 0 ? 'Connections remain' : (completedWithRuleIssues ? 'Check the rule issues' : (labels[job?.state] || (job?.state ? job.state : 'Ready when you are')));
+    $('phaseLabel').textContent = phaseName(job?.phase) || (hasJob ? 'Choose settings and start routing' : 'No routing in progress');
     $('jobStateIcon').textContent = awaitingMoreTime(job) ? icons[job.state] : (active ? '⤳' : (completedWithRuleIssues ? '!' : (icons[job?.state] || '○')));
     $('jobState').className = `job-state ${active && !awaitingMoreTime(job) ? 'running' : (job?.state === 'error' || completedWithRuleIssues ? 'failed' : job?.state || '')}`;
     $('elapsedValue').textContent = seconds(job?.elapsedSeconds);
     $('jobError').hidden = !job?.error;
     $('jobError').textContent = job?.error ? String(job.error) : '';
-    $('canvasLabelText').textContent = active ? 'Engine snapshot' : (job?.state === 'ready' ? (job.routingCleared ? 'Cleared input board' : 'Input board') : (job?.state === 'stopped' && job.bestResult?.available ? (job.bestResult.fromInput ? (job.routingCleared ? 'Cleared input board · routing stopped' : 'Original checked board · routing stopped') : 'Best checked result · routing stopped') : (hasJob ? 'Latest board snapshot' : '')));
+    $('canvasLabelText').textContent = active ? 'Current board' : (job?.state === 'ready' ? (job.routingCleared ? 'Cleared board' : 'Loaded board') : (job?.state === 'stopped' && job.bestResult?.available ? (job.bestResult.fromInput ? (job.routingCleared ? 'Cleared board · routing stopped' : 'Loaded board · routing stopped') : 'Best checked result · routing stopped') : (hasJob ? 'Latest result' : '')));
     applyStats(job);
     updatePhases(job);
     const logs = Array.isArray(job?.log) ? job.log.map(line => typeof line === 'string' ? line : JSON.stringify(line)) : [];
@@ -841,7 +841,7 @@
       updateControls();
       syncActivityVisual();
     } catch (error) {
-      if (!board) $('geometrySummary').textContent = 'Board geometry is not available yet';
+      if (!board) $('geometrySummary').textContent = 'Your board preview is not ready yet';
     } finally { fetchingBoard = false; $('boardBusy').hidden = true; }
   }
 
@@ -1125,13 +1125,13 @@
     $('connectionActivityLabel').hidden = !enabled;
     if (!enabled) return;
     const visible = !!current;
-    const names = { pad: 'Examining pads', via: 'Examining vias', grid: 'Preparing clearance grid', search: 'Testing search branches', candidate: 'Unverified candidate', trace: 'Examining traces', check: 'Checking geometry' };
-    const details = { pad: 'Actual pad locations', via: 'Actual via locations', grid: 'Current grid area', search: 'Actual explored paths · not routed copper', candidate: 'Proposed path under evaluation', trace: 'Engine-reported trace', check: 'Current rule-check area' };
+    const names = { pad: 'Checking pads', via: 'Checking vias', grid: 'Mapping clearances', search: 'Trying different paths', candidate: 'Trying this path', trace: 'Checking traces', check: 'Checking copper shapes' };
+    const details = { pad: 'Pads being checked', via: 'Vias being checked', grid: 'Area being mapped', search: 'Paths being tried · not finished traces', candidate: 'Checking whether this path works', trace: 'Trace being checked', check: 'Area being checked' };
     const samples = visible ? [...recent, spatialActivity] : recent;
     const routeOnly = samples.length && samples.every(item => item.routeSample);
-    const title = visible ? names[spatialActivity.kind] : (phaseName(activityJob()?.phase) || 'Engine activity');
-    const titleText = recent.length ? `${title} · current + recent` : title;
-    const detailText = recent.length ? (routeOnly ? `${samples.length} sampled net paths · recent samples fade · not routed copper` : `${samples.length} work samples · actual current + recent locations${samples.some(item => ['search', 'candidate'].includes(item.kind)) ? ' · candidate paths are unverified' : ''}`) : (visible ? (spatialActivity.label || details[spatialActivity.kind]) : (!board ? 'Waiting for board preview' : (spatialActivity ? 'Waiting for next location update' : 'No location reported for this stage')));
+    const title = visible ? names[spatialActivity.kind] : (phaseName(activityJob()?.phase) || 'Routing activity');
+    const titleText = recent.length ? `${title} · now + recent` : title;
+    const detailText = recent.length ? (routeOnly ? `${samples.length} sampled paths · recent paths fade · not finished traces` : `${samples.length} work samples · now + recent areas${samples.some(item => ['search', 'candidate'].includes(item.kind)) ? ' · paths are still being checked' : ''}`) : (visible ? (spatialActivity.label || details[spatialActivity.kind]) : (!board ? 'Waiting for your board preview' : (spatialActivity ? 'Waiting for the next area' : 'This step has no area to highlight yet')));
     const kind = visible ? spatialActivity.kind : (recent.length ? recent[recent.length - 1].kind : 'phase');
     if ($('activityVisualTitle').textContent !== titleText) $('activityVisualTitle').textContent = titleText;
     if ($('activityVisualDetail').textContent !== detailText) $('activityVisualDetail').textContent = detailText;
@@ -1400,7 +1400,7 @@
     const summary = job?.copperSummary;
     const count = summary?.zoneCount ?? board?.copperZones?.length ?? 0;
     const copperNets = summary?.netNames?.slice(0, 3).join(', ');
-    $('copperSummary').textContent = count ? `${number(count)} temporary copper ${count === 1 ? 'area' : 'areas'}${copperNets ? ' · ' + copperNets : ''}` : 'Create a copper area connected to a net.';
+    $('copperSummary').textContent = count ? `${number(count)} temporary copper ${count === 1 ? 'area' : 'areas'}${copperNets ? ' · ' + copperNets : ''}` : 'Add copper and choose the net it connects to.';
     $('copperExportNote').hidden = !count;
     $('downloadCopper').hidden = !count;
     $('downloadCopper').disabled = !connected || active || busy || !count;
@@ -1432,10 +1432,10 @@
     busy = true; updateControls();
     try {
       if (saveSettings && !await download('copper', true)) return;
-      if (pending.jobId !== currentState?.job?.id) throw new Error('The board changed. Choose an export from the current board.');
+      if (pending.jobId !== currentState?.job?.id) throw new Error('You loaded a different board. Choose its export again.');
       if (!await download(pending.type, true)) return;
       pendingCopperExport = null; $('copperExportDialog').close();
-      toast(saveSettings ? 'Copper settings and routing exported. Refill your matching copper pours and check connectivity in your PCB editor.' : 'Routing exported. Use your matching copper pours and check connectivity in your PCB editor.');
+      toast(saveSettings ? 'Routes and copper settings saved. Refill matching copper pours and check connectivity in your PCB editor.' : 'Routes saved. Refill matching copper pours and check connectivity in your PCB editor.');
     } catch (error) { toast(error.message, true); }
     finally { busy = false; updateControls(); }
   }
@@ -1445,15 +1445,15 @@
     const jobId = currentState.job.id;
     busy = true; copperLoadPromptJobId = null; updateControls();
     try {
-      if (file.size > 2 * 1024 * 1024) throw new Error('Choose a copper settings file smaller than 2 MiB.');
+      if (file.size > 2 * 1024 * 1024) throw new Error('This copper settings file is too large. Choose one smaller than 2 MiB.');
       let settings;
-      try { settings = JSON.parse(await file.text()); } catch { throw new Error('Choose a valid RamenRouter copper settings JSON file.'); }
-      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Choose a RamenRouter copper settings file saved from this board.');
-      if (jobId !== currentState?.job?.id) throw new Error('The board changed. Choose a settings file for the current board.');
+      try { settings = JSON.parse(await file.text()); } catch { throw new Error('This is not a readable copper settings file. Choose the JSON saved by RamenRouter.'); }
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Choose the RamenRouter copper settings saved for this board.');
+      if (jobId !== currentState?.job?.id) throw new Error('You loaded a different board. Choose the settings saved for this one.');
       await post('/api/copper-zones/import', { jobId, settings, routingSettings: getSettings() });
       if ($('copperDialog').open) $('copperDialog').close();
       if ($('copperLoadDialog').open) $('copperLoadDialog').close();
-      toast('Copper settings loaded. Rebuilding the temporary areas and checking their connections…');
+      toast('Copper settings loaded. Rebuilding the areas and checking their connections…');
     } catch (error) { if ($('copperDialog').open) copperError(error.message); else toast(error.message, true); }
     finally { busy = false; $('copperSettingsFileInput').value = ''; updateControls(); }
   }
@@ -1471,7 +1471,7 @@
     try {
       const data = await api('/api/copper-zones');
       if (currentState?.job?.id !== jobId || isActive()) return;
-      if (!data || !Array.isArray(data.layers) || !Array.isArray(data.nets) || !Array.isArray(data.zones)) throw new Error('Copper settings are not available for this board yet.');
+      if (!data || !Array.isArray(data.layers) || !Array.isArray(data.nets) || !Array.isArray(data.zones)) throw new Error('Copper settings are not ready for this board yet.');
       copperData = { ...data, jobId: data.jobId || jobId };
       copperDrafts = structuredClone(data.zones);
       selectedCopperId = copperDrafts[0]?.id ?? null;
@@ -1499,14 +1499,14 @@
     // rectangle against the actual board when several outlines are present.
     if (candidates.length === 1) return openCopperRing(candidates[0].map(point => [Number(point[0]), Number(point[1])]));
     const bounds = getBounds();
-    if (!bounds) throw new Error('A board outline is needed before adding a whole-board copper fill.');
+    if (!bounds) throw new Error('This board needs an outline before you can fill the whole board with copper.');
     return [[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[2], bounds[3]], [bounds[0], bounds[3]]];
   }
 
   function newCopperZone(points = []) {
     const net = copperData.nets.find(item => /^(GND|GROUND)$/i.test(item.name)) || copperData.nets[0];
     const layer = copperData.layers[0];
-    if (!net || !layer) throw new Error('This board needs a net and a copper layer before adding a fill.');
+    if (!net || !layer) throw new Error('This board needs a net and a copper layer before you can add a fill.');
     const clearance = Number.isFinite(net.clearance) ? net.clearance : .2;
     const width = Number.isFinite(net.width) && net.width > 0 ? net.width : .25;
     const id = `zone-${globalThis.crypto?.randomUUID?.() || Date.now() + '-' + Math.random().toString(16).slice(2)}`;
@@ -1582,13 +1582,13 @@
       const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.setAttribute('aria-label', `Delete cutout ${index + 1}`); remove.addEventListener('click', () => { readCopperEditor(); zone.cutouts.splice(index, 1); renderCopperDraft(); });
       row.append(label, edit, remove); list.append(row);
     }
-    if (!zone.cutouts?.length) { const empty = document.createElement('p'); empty.className = 'copper-helper'; empty.textContent = 'No cutouts. Draw one to leave a component or an area clear.'; list.append(empty); }
+    if (!zone.cutouts?.length) { const empty = document.createElement('p'); empty.className = 'copper-helper'; empty.textContent = 'No cutouts yet. Draw one wherever you want to keep copper out.'; list.append(empty); }
   }
 
   function validateCopperPolygon(points) {
     points = openCopperRing(points);
     if (!Array.isArray(points) || points.length < 3) throw new Error('Place at least three points to make a closed shape.');
-    if (points.some(point => !Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite))) throw new Error('The boundary contains an invalid point. Redraw this shape.');
+    if (points.some(point => !Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite))) throw new Error('One boundary point is invalid. Redraw this shape.');
     let twiceArea = 0;
     for (let i = 0; i < points.length; i++) { const next = points[(i + 1) % points.length]; twiceArea += points[i][0] * next[1] - next[0] * points[i][1]; }
     if (Math.abs(twiceArea) < 1e-12) throw new Error('This shape has no area. Place points around the area you want to fill.');
@@ -1598,7 +1598,7 @@
       if (j === i + 1 || (i === 0 && j === points.length - 1)) continue;
       const a = points[i], b = points[(i + 1) % points.length], c = points[j], d = points[(j + 1) % points.length];
       const crossed = orientation(a, b, c) * orientation(a, b, d) < 0 && orientation(c, d, a) * orientation(c, d, b) < 0;
-      if (crossed || onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b)) throw new Error('The boundary crosses or touches itself. Undo a point and draw a simple closed shape.');
+      if (crossed || onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b)) throw new Error('The boundary crosses or touches itself. Undo a point and keep the outline from crossing itself.');
     }
   }
 
@@ -1614,7 +1614,7 @@
         for (const field of ['clearance', 'edgeClearance']) if (!Number.isFinite(zone[field]) || zone[field] < 0) throw new Error('Enter a clearance of zero or greater.');
         if (zone.padConnection === 'spoke') for (const field of ['thermalGap', 'spokeWidth']) if (!Number.isFinite(zone[field]) || zone[field] <= 0) throw new Error('Enter a spoke gap and width greater than zero.');
         if (zone.style !== 'solid') {
-          if (!Number.isFinite(zone.gridPitch) || !Number.isFinite(zone.gridWidth) || zone.gridWidth <= 0 || zone.gridPitch <= zone.gridWidth) throw new Error('Grid pitch must be greater than its line width, and both must be greater than zero.');
+          if (!Number.isFinite(zone.gridPitch) || !Number.isFinite(zone.gridWidth) || zone.gridWidth <= 0 || zone.gridPitch <= zone.gridWidth) throw new Error('Grid spacing must be wider than the grid lines. Both values must be greater than zero.');
         }
       }
     } catch (error) { copperError(error.message); return; }
@@ -1739,7 +1739,7 @@
     view.scale = Math.min((view.width - 70) / width, (view.height - 70) / height); view.x = view.width / 2 - (minX + maxX) / 2 * view.scale; view.y = view.height / 2 + (minY + maxY) / 2 * view.scale;
     updateZoom(); draw();
     $('copperDialog').close();
-    toast('Draft boundary shown. Your edits are kept; reopen Copper fills to continue.');
+    toast('Your boundary is on the board. Reopen Copper fills to keep editing; your changes are still here.');
   }
 
   function readRoutingOptions() {
@@ -1852,7 +1852,7 @@
   function updateDirectionPreview() {
     const layers = netLayersData?.layers || [];
     if (layers.length < 2) {
-      $('directionLayerPreview').textContent = 'Alternating directions needs at least two copper layers. A single-layer board keeps its usual routing behavior.';
+      $('directionLayerPreview').textContent = 'Alternating directions needs at least two copper layers. There is nothing to alternate on a single-layer board.';
       return;
     }
     const preview = layers.map(layer => `${layer.displayName || layer.name}: ${layer.preferredDirection === 'vertical' ? 'vertical ↕' : layer.preferredDirection === 'horizontal' ? 'horizontal ↔' : 'no preference'}`).join(' · ');
@@ -1884,7 +1884,7 @@
       row.classList.toggle('net-layer-edited', edited);
       net.status.textContent = !selected.size ? 'Select at least one layer' : (imported ? 'Imported rules' : 'Custom rules');
       net.padWarning.hidden = !unreachable;
-      net.padWarning.textContent = unreachable ? `${number(unreachable)} ${unreachable === 1 ? 'pad needs' : 'pads need'} a short escape to reach the main layers` : '';
+      net.padWarning.textContent = unreachable ? `${number(unreachable)} ${unreachable === 1 ? 'pad needs' : 'pads need'} a short pad escape to reach the selected layers` : '';
       net.reset.disabled = unavailable || imported;
       for (const checkbox of row.querySelectorAll('input[data-layer-id]')) {
         checkbox.disabled = unavailable;
@@ -1908,12 +1908,12 @@
     shortHeading.disabled = unavailable || shownNets.length === 0;
     $('netLayerCount').textContent = `${number(shownNets.length)} of ${number(netLayersData.nets.length)} nets shown · ${number(changed)} ${changed === 1 ? 'change' : 'changes'} to apply`;
     $('netLayerValidation').hidden = !invalid;
-    $('netLayerValidation').textContent = invalid ? `Select at least one layer for every net. ${number(invalid)} ${invalid === 1 ? 'net needs' : 'nets need'} a layer, including any hidden by your search.` : '';
+    $('netLayerValidation').textContent = invalid ? `Every net needs at least one layer. ${number(invalid)} ${invalid === 1 ? 'net needs' : 'nets need'} a layer, including nets hidden by your search.` : '';
     $('netLayerPadWarning').hidden = !inaccessible;
-    $('netLayerPadWarning').textContent = inaccessible ? `${number(inaccessible)} ${inaccessible === 1 ? 'pad has' : 'pads have'} no selected main layer. The router will try a short, full-width trace to a nearby via outside the pad, then continue on a selected layer. A legal escape still needs available space. Vias inside SMD pads remain controlled separately.` : '';
+    $('netLayerPadWarning').textContent = inaccessible ? `${number(inaccessible)} ${inaccessible === 1 ? 'pad has' : 'pads have'} no direct connection to a selected layer. RamenRouter will try a short, full-width escape to a nearby via, then stay on a selected layer. The escape still needs room and must pass your rules. The SMD-via switch controls whether that via can go inside the pad.` : '';
     const optionsChanged = routingOptionsBeforeDialog && JSON.stringify(readRoutingOptions()) !== JSON.stringify(routingOptionsBeforeDialog);
     $('applyNetLayers').disabled = unavailable || invalid > 0 || (!changed && !optionsChanged);
-    $('netLayersApplyNote').textContent = changed ? 'Save your current result first. Changing net rules replaces the routed result with the input board; imported copper stays. Routing options are saved only after these net rules pass their checks.' : 'Routing options apply to your next run. Your current result stays available.';
+    $('netLayersApplyNote').textContent = changed ? 'Save your current result first. Changing net rules starts again from the board you loaded and keeps its imported copper. Routing options are saved once the net rules pass their checks.' : 'These options apply to your next run. Your current result stays here.';
     $('resetAllNetLayers').disabled = unavailable || netLayersData.nets.every(net => sameRoutingRule(net, true));
     $('netLayerSearch').disabled = unavailable;
   }
@@ -2027,35 +2027,35 @@
     const options = readRoutingOptions(), previous = routingOptionsBeforeDialog;
     if (!changes.length) {
       routingOptionsBeforeDialog = null; saveSettings(options); discardRoutingRuleDraft(); $('netLayersDialog').close();
-      updateControls(); toast('Routing options saved. Your current result is kept.'); return;
+      updateControls(); toast('Options saved for your next run. Your current result stays here.'); return;
     }
     $('routingRulesError').hidden = true;
     busy = true; updateControls();
     try {
       const state = await api('/api/routing-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: data.jobId, changes }) });
-      if (!state?.job) throw new Error('The engine did not confirm the routing rule update.');
+      if (!state?.job) throw new Error('Could not confirm your routing rules. Try again.');
       pendingRoutingOptions = { sourceJobId: data.jobId, transactionJobId: state.job.id, options, previous };
       discardRoutingRuleDraft(); $('netLayersDialog').close(); applyState(state);
     }
     catch (error) {
       pendingRoutingOptions = null;
-      $('routingRulesError').textContent = `Routing rules were not applied. ${error.message}`; $('routingRulesError').hidden = false;
+      $('routingRulesError').textContent = `Your routing rules were not applied. ${error.message}`; $('routingRulesError').hidden = false;
     }
     finally { busy = false; updateControls(); }
   }
 
   async function upload(file) {
     if (!file) return;
-    if (hasPreviousRulesDecision()) { $('fileInput').value = ''; toast('Choose whether to reuse the previous rules first.'); return; }
-    if (copperDrawing || $('copperDialog').open) { toast('Finish or cancel editing your copper areas before loading another board.'); return; }
+    if (hasPreviousRulesDecision()) { $('fileInput').value = ''; toast('Choose whether to keep your previous rules first.'); return; }
+    if (copperDrawing || $('copperDialog').open) { toast('Finish or cancel your copper edits before loading another board.'); return; }
     if (busy || isActive() || !connected) return;
-    if (!/\.dsn$/i.test(file.name)) { toast('Choose a Specctra .dsn file exported from your PCB editor.', true); return; }
+    if (!/\.dsn$/i.test(file.name)) { toast('Choose a .dsn board exported from your PCB editor.', true); return; }
     if (file.size === 0) { toast('This file is empty. Export a new DSN from your PCB editor.', true); return; }
     busy = true; updateControls(); $('boardBusy').hidden = false;
     try {
       const result = await api(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
       if (result) { applyState(result); if (hasSavedCopperSettings) copperLoadPromptJobId = result.job?.id || null; }
-      toast(`${file.name} imported. Reading board data…`);
+      toast(`${file.name} loaded. Reading your board…`);
     } catch (error) { toast(error.message, true); }
     finally { busy = false; $('fileInput').value = ''; updateControls(); $('boardBusy').hidden = false; setTimeout(() => { if (!fetchingBoard) $('boardBusy').hidden = true; }, 1000); }
   }
@@ -2067,13 +2067,13 @@
       return;
     }
     try {
-      if (!nativeEngine || typeof nativeEngine.download !== 'function') throw new Error('Browser downloads are unavailable. Reopen index.html.');
+      if (!nativeEngine || typeof nativeEngine.download !== 'function') throw new Error('Downloads are not ready. Reopen index.html and try again.');
       await nativeEngine.download(type);
       if (type === 'ses') downloadedSesJobId = currentState?.job?.id;
       if (type === 'dsn') downloadedDsnJobId = currentState?.job?.id;
       if (type === 'copper') { downloadedCopperJobId = currentState?.job?.id; rememberSavedCopperSettings(); }
       updateExportAttention();
-      toast(type === 'log' ? 'Engine log downloaded.' : (type === 'report' ? 'Rule-check report downloaded.' : 'Export downloaded. Validate the result in your PCB editor.'));
+      toast(type === 'log' ? 'Routing log saved.' : (type === 'report' ? 'Rule-check report saved.' : 'Export saved. Check the result in your PCB editor.'));
       return true;
     } catch (error) { toast(error.message, true); return false; }
   }
@@ -2109,7 +2109,7 @@
   }
 
   function renderReportStages(report) {
-    const names = { reading: 'Read board', preparing: 'Prepare grids', searching: 'Search paths', routing: 'Route & repair', fanout: 'Pad escapes', refining: 'Refine routes', checking: 'Check rules', advising: 'Placement advice', exporting: 'Prepare exports', fingerprinting: 'Identify workload', other: 'Other processing' };
+    const names = { reading: 'Read board', preparing: 'Map copper and clearances', searching: 'Search paths', routing: 'Route & repair', fanout: 'Pad escapes', refining: 'Refine routes', checking: 'Check rules', advising: 'Placement advice', exporting: 'Get exports ready', fingerprinting: 'Identify this board', other: 'Other work' };
     const fragment = document.createDocumentFragment();
     for (const stage of report.stages) {
       if (stage.activeMs <= 0) continue;
@@ -2124,12 +2124,12 @@
     }
     $('reportStages').replaceChildren(fragment);
     const partial = report.coverage?.partial;
-    $('reportCoverageNote').textContent = partial ? `Partial measurement: worker counters and stage timings were received through ${reportDuration(report.timing.measuredThroughMs)}. Stopping can interrupt work before its next report.` : 'Measured inside the routing worker, including preparation and final checks. Nested search time is not counted twice. Paused time is excluded.';
+    $('reportCoverageNote').textContent = partial ? `Partial measurement: work and timing updates were recorded through ${reportDuration(report.timing.measuredThroughMs)}. Stopping can end a step before its next update.` : 'Includes board preparation and final checks. Time spent searching is counted once, and pauses are left out.';
   }
 
   function renderReportProgress(report) {
     const container = $('reportProgressChart');
-    if (!report.progress.length) { container.replaceChildren(reportElement('p', 'No checked routing snapshots were available for this run.', 'report-note')); return; }
+    if (!report.progress.length) { container.replaceChildren(reportElement('p', 'No checked results were recorded for this run.', 'report-note')); return; }
     const points = report.progress;
     const width = Math.max(260, Math.min(760, window.innerWidth - (window.innerWidth <= 600 ? 70 : 110)));
     const height = 230, left = 48, right = 18, top = 18, bottom = 40;
@@ -2144,7 +2144,7 @@
       return node;
     };
     const svg = svgNode('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-labelledby': 'reportChartTitle reportChartDescription' });
-    svg.append(svgNode('title', { id: 'reportChartTitle' }, 'Checked connections remaining over processing time'));
+    svg.append(svgNode('title', { id: 'reportChartTitle' }, 'Connections left over time, from checked results'));
     svg.append(svgNode('desc', { id: 'reportChartDescription' }, `The first recorded result had ${number(points[0].unrouted)} connections remaining. The last had ${number(points[points.length - 1].unrouted)} after ${reportDuration(points[points.length - 1].activeMs)} of processing.`));
     for (const level of [0, .5, 1]) {
       const remaining = Math.round(maxRemaining * level), py = y(remaining);
@@ -2171,12 +2171,12 @@
     const searchMs = report.stages.filter(stage => stage.name === 'searching').reduce((sum, stage) => sum + stage.activeMs, 0);
     const rows = [
       ['Total trace length', `${number(stats.traceLengthMm, 2)} mm`], ['Vias', number(stats.viaCount)],
-      ['Trace items', number(stats.traceCount)], ['Undersized traces', number(stats.belowNominalWidthTraceCount)],
-      ['Searches attempted', number(counters.searches)], ['Grid positions explored', number(counters.gridPositions)],
+      ['Trace segments', number(stats.traceCount)], ['Undersized traces', number(stats.belowNominalWidthTraceCount)],
+      ['Paths searched', number(counters.searches)], ['Grid positions explored', number(counters.gridPositions)],
       ['Grid positions per search second', searchMs > 0 ? number(counters.gridPositions / (searchMs / 1000)) : '—'],
-      ['Net attempts', number(counters.netAttempts)], ['Rip-ups', number(counters.ripups)],
-      ['Refinement candidates', number(counters.refinementCandidates)], ['Redundant via checks', number(counters.redundantViaChecks)],
-      ['Fanout candidates', number(counters.fanoutCandidates)], ['Fanout combinations', number(counters.fanoutCombinations)],
+      ['Attempts to connect nets', number(counters.netAttempts)], ['Routes removed to make room', number(counters.ripups)],
+      ['Refinements tried', number(counters.refinementCandidates)], ['Checks for unnecessary vias', number(counters.redundantViaChecks)],
+      ['Pad escapes considered', number(counters.fanoutCandidates)], ['Pad-escape combinations', number(counters.fanoutCombinations)],
       ['Time paused', reportDuration(report.timing.pausedMs)]
     ];
     for (const [key, label] of [['attempt', 'Routing attempts'], ['repair', 'Repair rounds'], ['refinement', 'Refinement rounds']]) {
@@ -2194,9 +2194,9 @@
       for (const value of [number(net.searches), number(net.gridPositions), reportDuration(net.activeMs)]) row.append(reportElement('td', value));
       hardRows.append(row);
     }
-    if (!report.hardestNets.length) { const row = reportElement('tr'), cell = reportElement('td', 'No per-net search work recorded.'); cell.colSpan = 4; row.append(cell); hardRows.append(row); }
+    if (!report.hardestNets.length) { const row = reportElement('tr'), cell = reportElement('td', 'No search work was recorded for individual nets.'); cell.colSpan = 4; row.append(cell); hardRows.append(row); }
     $('reportHardest').replaceChildren(hardRows);
-    $('reportEnvironment').textContent = `RamenRouter ${report.appVersion} · ${report.protocol === 'fixed-work-v1' ? 'Fixed-work benchmark' : 'Normal routing'} · ${reportBrowser(report)} · ${report.environment.workerCount} routing worker · Live work ${report.environment.animationEnabled ? 'on' : 'off'}${report.environment.animationChanged ? ' (changed during run)' : ''}. Board fingerprint: ${report.boardFingerprint ? report.boardFingerprint.slice(0, 16) + '…' : 'not available'}`;
+    $('reportEnvironment').textContent = `RamenRouter ${report.appVersion} · ${report.protocol === 'fixed-work-v1' ? 'Fixed-work benchmark' : 'Normal routing'} · ${reportBrowser(report)} · ${report.environment.workerCount} routing task · Live work ${report.environment.animationEnabled ? 'on' : 'off'}${report.environment.animationChanged ? ' (changed during run)' : ''}. Board match ID: ${report.boardFingerprint ? report.boardFingerprint.slice(0, 16) + '…' : 'not available'}`;
   }
 
   function reportWithLabel() {
@@ -2216,9 +2216,9 @@
     status.classList.toggle('comparable', comparison.comparable);
     if (comparison.comparable) {
       const ratio = current.timing.activeMs / other.timing.activeMs;
-      status.textContent = ratio >= 1 ? `Matching completed workload. ${bLabel} was ${number(current.timing.activeMs / other.timing.activeMs, 2)}× as fast as ${aLabel}.` : `Matching completed workload. ${aLabel} was ${number(other.timing.activeMs / current.timing.activeMs, 2)}× as fast as ${bLabel}.`;
-      if (Math.abs(ratio - 1) < .005) status.textContent = 'Matching completed workload. Processing times were approximately equal.';
-    } else status.textContent = `Side-by-side results only; no speed ranking. ${comparison.reasons.join(' ')}`;
+      status.textContent = ratio >= 1 ? `Same completed workload. ${bLabel} was ${number(current.timing.activeMs / other.timing.activeMs, 2)}× as fast as ${aLabel}.` : `Same completed workload. ${aLabel} was ${number(other.timing.activeMs / current.timing.activeMs, 2)}× as fast as ${bLabel}.`;
+      if (Math.abs(ratio - 1) < .005) status.textContent = 'Same completed workload. Both took about the same time.';
+    } else status.textContent = `Compare the results side by side. These runs cannot give a fair speed ranking. ${comparison.reasons.join(' ')}`;
     const table = $('benchmarkCompareTable'), head = reportElement('thead'), headRow = reportElement('tr');
     for (const label of ['Measurement', aLabel, bLabel]) { const cell = reportElement('th', label); cell.scope = 'col'; headRow.append(cell); }
     head.append(headRow); const body = reportElement('tbody');
@@ -2261,9 +2261,9 @@
       $('reportFirstComplete').textContent = report.timing.firstCompleteMs === null ? 'Not reached' : reportDuration(report.timing.firstCompleteMs);
       $('reportRemaining').textContent = number(report.final?.unrouted);
       $('reportRuleIssues').textContent = number(report.final?.totalViolations);
-      $('reportRuleNote').textContent = report.final?.drcChecked ? 'Imported clearance and placement checks' : 'Final rule checks were not completed';
-      $('reportFirstCompleteNote').textContent = report.timing.firstCompleteMs === null ? 'No fully connected result passed all imported checks' : !report.complete ? 'A complete checked candidate was reached; the retained result differs' : 'All connections and imported checks passed';
-      $('reportOutcome').textContent = `${report.status === 'stopped' ? 'Stopped run' : report.status === 'error' ? 'Interrupted by an error' : report.complete ? 'Completed and checked' : 'Finished with connections or rule issues remaining'} · ${report.protocol === 'fixed-work-v1' ? 'Fixed-work benchmark' : 'Normal routing'}${report.coverage?.partial ? ' · partial measurements' : ''}`;
+      $('reportRuleNote').textContent = report.final?.drcChecked ? 'Imported clearance and placement checks' : 'Final rule checks did not finish';
+      $('reportFirstCompleteNote').textContent = report.timing.firstCompleteMs === null ? 'No fully connected result passed every imported check' : !report.complete ? 'A fully connected, checked result was found earlier. The saved result is different.' : 'Every connection and imported check passed';
+      $('reportOutcome').textContent = `${report.status === 'stopped' ? 'Stopped run' : report.status === 'error' ? 'Interrupted by an error' : report.complete ? 'Completed and checked' : 'Finished with missing connections or rule issues'} · ${report.protocol === 'fixed-work-v1' ? 'Fixed-work benchmark' : 'Normal routing'}${report.coverage?.partial ? ' · partial measurements' : ''}`;
       $('reportOutcome').classList.toggle('complete', report.complete);
       if (reportJobId !== job.id) {
         reportJobId = job.id;
@@ -2274,7 +2274,7 @@
       $('benchmarkImportError').hidden = true;
       renderReportStages(report); renderReportProgress(report); renderReportDetails(report); renderBenchmarkComparison();
       $('runReportDialog').showModal();
-    } catch (error) { toast(`Run report unavailable: ${error.message}`, true); }
+    } catch (error) { toast(`Could not open this run’s report: ${error.message}`, true); }
   }
 
   function exportRunReport() {
@@ -2284,7 +2284,7 @@
       const url = URL.createObjectURL(blob), link = reportElement('a');
       link.href = url; link.download = `RamenRouter-benchmark-${report.appVersion}-${report.boardFingerprint ? report.boardFingerprint.slice(0, 12) : 'partial'}.json`;
       document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast('Benchmark exported. Board geometry and net names are not included.');
+      toast('Benchmark saved. It leaves out your board layout and net names.');
     } catch (error) { $('benchmarkImportError').textContent = error.message; $('benchmarkImportError').hidden = false; }
   }
 
@@ -2292,7 +2292,7 @@
     if (!file || !displayedRunReport) return;
     $('benchmarkImportError').hidden = true;
     try {
-      if (file.size > 256 * 1024) throw new Error('Choose a benchmark JSON file smaller than 256 KiB.');
+      if (file.size > 256 * 1024) throw new Error('This benchmark file is too large. Choose one smaller than 256 KiB.');
       const report = benchmarkTools.validateReport(await file.text());
       importedRunReport = report; renderBenchmarkComparison();
       $('benchmarkCompareSection').scrollIntoView({ block: 'nearest' });
@@ -2389,7 +2389,7 @@
     if (busy || isActive() || hasPreviousRulesDecision()) return;
     acknowledgeAttention();
     busy = true; updateControls();
-    try { await post('/api/demo'); toast('Example board loaded. Choose your settings to try the engine.'); }
+    try { await post('/api/demo'); toast('Example board loaded. Choose your settings and give it a run.'); }
     catch (error) { toast(error.message, true); }
     finally { busy = false; updateControls(); }
   });
@@ -2417,14 +2417,14 @@
   });
   $('forceStopButton').addEventListener('click', async () => {
     forcedStop = true; updateControls();
-    try { await post('/api/stop', { force: true }); toast('Routing stopped. Any checked result is kept.'); }
+    try { await post('/api/stop', { force: true }); toast('Routing stopped. Any checked result stays here.'); }
     catch (error) { forcedStop = false; toast(error.message, true); updateControls(); }
   });
-  $('forceStopButton').title = 'Immediately stop the engine and keep any checked result.';
+  $('forceStopButton').title = 'Stop routing now and keep any checked result.';
   for (const [id, type] of [['downloadSes', 'ses'], ['downloadDsn', 'dsn'], ['downloadChecks', 'report'], ['downloadLog', 'log'], ['downloadCopper', 'copper']]) $(id).addEventListener('click', () => void download(type));
   $('copyLog').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(lastLogs); toast('Engine log copied.'); }
-    catch { toast('Clipboard access unavailable. Use Engine log to download it.', true); }
+    try { await navigator.clipboard.writeText(lastLogs); toast('Routing log copied.'); }
+    catch { toast('Could not copy the log. Download the Routing log instead.', true); }
   });
   $('logToggle').addEventListener('click', () => {
     const collapsed = document.querySelector('.activity-panel').classList.toggle('collapsed');
