@@ -1,5 +1,5 @@
 /* RamenRouter browser-native grid router. GPL-3.0. No Java or external runtime. */
-function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
+function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
   'use strict';
   const G=geometry, SQRT2=Math.SQRT2, EPS=1e-7;
   const copy=o=>JSON.parse(JSON.stringify(o));
@@ -27,7 +27,21 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
   }
   async function route(input,options={},emit=()=>{},isCancelled=()=>false){
     const measurement=yieldTask?.measurement,finishRoute=measurement?.begin('routing');
-    const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
+    const fillSignatures=new WeakMap(),fillCache=new Map();
+    const hasZones=board=>(board.copperZones||[]).length>0;
+    const fillProgress=activity=>emit({type:'progress',phase:'copper_fill',message:activity.message,activity});
+    // A pour is derived from the current tracks and vias. Never check a route
+    // against yesterday's copper: a new foreign track can split a plane.
+    function refreshFills(board){
+      if(!hasZones(board))return;
+      if(!copper?.build)throw new Error('Copper-fill routing support is not loaded.');
+      const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);
+      if(fillSignatures.get(board)===signature)return;
+      if(fillCache.has(signature)){board.copperFills=copy(fillCache.get(signature));fillCache.delete(signature);fillCache.set(signature,board.copperFills);}
+      else{board.copperFills=copper.build(board,options,fillProgress);fillCache.set(signature,board.copperFills);while(fillCache.size>4)fillCache.delete(fillCache.keys().next().value);}
+      fillSignatures.set(board,signature);
+    }
+    const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     const started=Date.now(),timeout=(options.timeoutMinutes||30)*60000,log=[];
     const stopped=()=>isCancelled()||(!yieldTask?.managesBudget&&Date.now()-started>=timeout);
@@ -74,6 +88,72 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const preferShort=net=>shortNets.has(net.id);
     const directions=options.preferredDirections===true&&original.layers.length>1?layerDirections(original.layers):null;
     const prioritizeShort=order=>{if(shortNets.size)order.sort((a,b)=>Number(preferShort(b))-Number(preferShort(a)));return order;};
+    async function attachPadsToPlanes(prepared){
+      const tracesBefore=prepared.traces.length,viasBefore=prepared.vias.length;
+      say('Preparing short pad connections to copper fills.',{phase:'fanout'});
+      // Unanchored islands are temporary placement candidates only. The
+      // ordinary rebuild below removes any island still without an anchor.
+      await copper.rebuild(prepared,{...options,keepUnanchored:true},fillProgress,stopped);
+      const edges=G.boundaryEdges(prepared),defs=new Map(prepared.viaDefs.map(def=>[def.name,def]));
+      const isMutable=primitive=>primitive.object.kind==='fill'&&primitive.object.item.zoneId!=null&&!primitive.object.item.fixed&&!primitive.object.item.imported;
+      const maxClear=Math.max(prepared.crossClassClearance||0,prepared.defaultClearance||0,...Object.values(prepared.classClearances||{}),...prepared.nets.map(net=>net.routingClearance??net.clearance??0));
+      const span=Math.max(prepared.bounds.maxX-prepared.bounds.minX,prepared.bounds.maxY-prepared.bounds.minY);
+      const indices=prepared.layers.map(layer=>G.spatialIndex(G.copper(prepared).primitives.filter(p=>p.layer===layer.index&&!isMutable(p)),Math.max(span/60,1e-5)));
+      function legal(shape,net,isVia,def){
+        if(!G.shapeInsideBoard(shape,prepared,edges))return false;
+        for(const other of indices[shape.layer]?.query(G.shapeBounds(shape),maxClear)||[]){
+          const distance=G.distanceShapes(shape,other.shape);
+          if(other.net!==net.id){if(distance<=EPS||distance+EPS<G.clearance(prepared,net,other.net))return false;}
+          else if(isVia&&other.object.kind==='pad'&&new Set(other.object.item.shapes.map(s=>s.layer)).size===1&&distance<=EPS&&!(prepared.viaAtSmd&&def.attachAllowed!==false))return false;
+        }
+        for(const keepout of prepared.keepouts||[]){if(keepout.layers&&!keepout.layers.includes(shape.layer)||keepout.kind==='via'&&!isVia)continue;const distance=G.distanceShapes(shape,keepout.shape);if(distance<=EPS||distance+EPS<(keepout.clearance??net.routingClearance??net.clearance??prepared.defaultClearance??0))return false;}
+        return true;
+      }
+      let processed=0;
+      for(const pad of prepared.pads){
+        if(stopped())break;
+        if(processed++%16===0){await yieldNow();if(stopped())break;detail('Connecting pads to copper fills · '+processed+'/'+prepared.pads.length,{stage:'plane-access',processed,total:prepared.pads.length},'fanout');}
+        const net=rules.get(pad.net),def=net&&defs.get(net.viaName);if(!net||!def)continue;
+        const allowedLayers=net.useLayers||prepared.layers.map(layer=>layer.index);
+        const fills=(prepared.copperFills||[]).filter(fill=>fill.net===net.id&&allowedLayers.includes(fill.layer)&&fill.layer>=def.fromLayer&&fill.layer<=def.toLayer);
+        if(!fills.length)continue;
+        const groups=G.connectivity(prepared,{airwires:false}).components.find(component=>component.net===net.id)?.groups||[];
+        if(groups.some(group=>group.pads.includes(pad.id)&&group.items.some(item=>item.kind==='fill')))continue;
+        const padLayers=[...new Set(pad.shapes.map(shape=>shape.layer))];
+        const sourceLayer=padLayers.find(layer=>layer>=def.fromLayer&&layer<=def.toLayer);if(sourceLayer===undefined)continue;
+        const shape=pad.shapes.find(shape=>shape.layer===sourceLayer),box=G.shapeBounds(shape),r=def.diameter/2,gap=Math.max(net.width*.05,EPS*10);
+        const candidates=[];
+        if(prepared.viaAtSmd&&def.attachAllowed!==false)candidates.push({x:pad.x,y:pad.y,distance:0});
+        const rays=[[1,0],[-1,0],[0,1],[0,-1],[Math.SQRT1_2,Math.SQRT1_2],[-Math.SQRT1_2,Math.SQRT1_2],[Math.SQRT1_2,-Math.SQRT1_2],[-Math.SQRT1_2,-Math.SQRT1_2]];
+        const vertices=shape.type==='polygon'?shape.points:[[box.minX,box.minY],[box.minX,box.maxY],[box.maxX,box.minY],[box.maxX,box.maxY]];
+        for(const ray of rays){const extent=Math.max(...vertices.map(point=>(point[0]-pad.x)*ray[0]+(point[1]-pad.y)*ray[1]));for(const extra of [0,1,2,4]){const distance=Math.max(0,extent)+r+gap+extra*net.width;candidates.push({x:pad.x+ray[0]*distance,y:pad.y+ray[1]*distance,distance});}}
+        const preferred=directions?.get(sourceLayer);
+        candidates.sort((a,b)=>{const cost=p=>p.distance*(preferred?(preferred==='vertical'?1+Math.abs(p.x-pad.x)/Math.max(p.distance,EPS)*.12:1+Math.abs(p.y-pad.y)/Math.max(p.distance,EPS)*.12):1);return cost(a)-cost(b);});
+        for(const candidate of candidates){
+          if(stopped())break;
+          const layers=Array.from({length:def.toLayer-def.fromLayer+1},(_,i)=>def.fromLayer+i);
+          const via={net:net.id,x:candidate.x,y:candidate.y,diameter:def.diameter,padstack:def.name,layers,fixed:false,fanout:true,planeAccess:true};
+          if(!fills.some(fill=>G.distanceShapes({type:'circle',cx:via.x,cy:via.y,r,layer:fill.layer},{type:'polygon',points:fill.points,holes:fill.holes||[],layer:fill.layer})<=EPS))continue;
+          if(!layers.every(layer=>legal({type:'circle',cx:via.x,cy:via.y,r,layer},net,true,def)))continue;
+          const trace=candidate.distance>EPS?{net:net.id,layer:sourceLayer,width:net.width,points:[[pad.x,pad.y],[via.x,via.y]],fixed:false,fanout:true,planeAccess:true}:null;
+          const trial={...prepared,vias:prepared.vias.concat(via),traces:trace?prepared.traces.concat(trace):prepared.traces};
+          if(trace&&(!allowedLayers.includes(sourceLayer)&&!G.isPermittedLayerEscape(trial,trace,net)||!legal({type:'capsule',a:trace.points[0],b:trace.points[1],r:trace.width/2,layer:sourceLayer},net,false,def)))continue;
+          await copper.rebuild(trial,{...options,keepUnanchored:true},fillProgress,stopped);
+          const connected=G.connectivity(trial,{airwires:false}).components.find(component=>component.net===net.id)?.groups.some(group=>group.pads.includes(pad.id)&&group.items.some(item=>item.kind==='via'&&item.index===trial.vias.length-1)&&group.items.some(item=>item.kind==='fill'));
+          if(!connected)continue;
+          prepared=trial;
+          const added=G.copper({ ...prepared,pads:[],traces:trace?[trace]:[],vias:[via],copperFills:[] }).primitives;
+          for(const primitive of added)indices[primitive.layer]?.insert(primitive);
+          spatial('Connecting '+net.name+' to its copper fill',{stage:'plane-access',netId:net.id,netName:net.name,padId:pad.id},()=>({kind:'via',points:layers.map(layer=>[via.x,via.y,layer]),paths:trace?[{layer:trace.layer,points:trace.points}]:[],label:'Actual short pad-to-plane connection'}),'fanout');
+          break;
+        }
+      }
+      await copper.rebuild(prepared,options,fillProgress,stopped);
+      const signature=JSON.stringify([prepared.copperZones,prepared.traces,prepared.vias]);
+      fillSignatures.set(prepared,signature);fillCache.set(signature,prepared.copperFills);while(fillCache.size>4)fillCache.delete(fillCache.keys().next().value);
+      say('Copper-fill access added '+(prepared.vias.length-viasBefore)+' vias and '+(prepared.traces.length-tracesBefore)+' short pad escapes.',{phase:'fanout'});
+      return prepared;
+    }
     // Trace length leads for selected nets. A small physical-length surcharge
     // breaks via ties without making long surface detours artificially cheap.
     const searchViaCost=net=>preferShort(net)?Math.min(options.viaCost||net.width*5,net.width*.1):(options.viaCost||net.width*5);
@@ -82,6 +162,14 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const initialStats=stats(original),baseViolation=initialStats.clearanceViolations,baseWidth=initialStats.belowNominalWidthTraceCount,baseTotal=initialStats.totalViolations;
     if(options.viaInPad===false&&initialStats.viaInPadViolations){const error=new Error('Existing vias overlap SMD pads while vias in SMD pads are disabled. Clear routing & start over, or enable vias in SMD pads before routing.');error.code='VIA_IN_PAD_CONFLICT';throw error;}
     let originalStats=initialStats;
+    if(hasZones(original)&&!stopped()){
+      try{
+        const prepared=await attachPadsToPlanes(copy(original));
+        const candidateStats=stats(prepared);
+        if(candidateStats.totalViolations<=baseTotal&&candidateStats.belowNominalWidthTraceCount<=baseWidth&&candidateStats.unrouted<=initialStats.unrouted){original=prepared;originalStats=candidateStats;}
+        else say('Keeping the imported copper: plane access did not pass the full rule check.',{phase:'checking'});
+      }catch(error){if(error.name!=='AbortError'||!stopped())throw error;}
+    }
     const needsLayerAccess=original.pads.some(p=>{const net=rules.get(p.net);return net&&new Set(p.shapes.map(s=>s.layer)).size===1&&net.useLayers&&!net.useLayers.includes(p.shapes[0].layer);});
     if((options.fanout!==false||options.fanoutOnly||needsLayerAccess)&&fanout&&!stopped()){
       const accessOnly=options.fanout===false&&!options.fanoutOnly;
@@ -138,7 +226,11 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const clearanceOf=n=>n?.routingClearance??n?.clearance??original.defaultClearance??0;
     const maxClearance=Math.max(original.defaultClearance||0,...original.nets.map(clearanceOf),...(original.keepouts||[]).map(k=>k.clearance||0));
     const indexSize=Math.max(narrowest*4,span/60,1e-5);
-    const immutable=G.copper(original).primitives.map(p=>({...p,clearance:clearanceOf(rules.get(p.net))}));
+    // User pours are rebuilt around new routing. Imported fixed copper regions
+    // stay immutable obstacles, exactly like imported tracks and pads.
+    const mutableFill=p=>p.object.kind==='fill'&&p.object.item.zoneId!=null&&!p.object.item.fixed&&!p.object.item.imported;
+    const immutable=G.copper(original).primitives.filter(p=>!mutableFill(p)).map(p=>({...p,clearance:clearanceOf(rules.get(p.net))}));
+    const fixedFills=immutable.filter(p=>p.object.kind==='fill');
     for(const k of original.keepouts||[])if(k.kind!=='via')for(const layer of k.layers||original.layers.map(l=>l.index))immutable.push({shape:{...k.shape,layer},layer,net:null,clearance:k.clearance??null,keepout:true,bounds:G.shapeBounds(k.shape)});
     const staticIndex=Array.from({length:layerCount},(_,l)=>G.spatialIndex(immutable.filter(p=>p.layer===l),indexSize));
     let dynamicIndex=null,indexGeneration=-1;
@@ -202,6 +294,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
         for(const t of original.traces){let clearance=Math.max(clearanceOf(net),clearanceOf(rules.get(t.net)));drawTrace(c.base,t,half+t.width/2+clearance,t.net);drawTrace(c.thickBase,t,half+t.width/2+clearance+guard,t.net);drawTrace(c.viaBase,t,via.diameter/2+t.width/2+clearance,t.net);if(++rasterItems%16===0){detail('Preparing imported trace clearances · '+rasterItems+'/'+original.traces.length,{stage:'trace-clearances',processed:rasterItems,total:original.traces.length},'rasterizing');if(Date.now()-lastRasterYield>=24){await yieldNow();lastRasterYield=Date.now();}if(stopped())return c;}}
         rasterItems=0;
         for(const v of original.vias){let clearance=Math.max(clearanceOf(net),clearanceOf(rules.get(v.net)));drawVia(c.base,v,half+v.diameter/2+clearance,v.net);drawVia(c.thickBase,v,half+v.diameter/2+clearance+guard,v.net);drawVia(c.viaBase,v,via.diameter/2+v.diameter/2+clearance,v.net);if(++rasterItems%32===0){detail('Preparing imported via clearances · '+rasterItems+'/'+original.vias.length,{stage:'via-clearances',processed:rasterItems,total:original.vias.length},'rasterizing');if(Date.now()-lastRasterYield>=24){await yieldNow();lastRasterYield=Date.now();}if(stopped())return c;}}
+        for(const fill of fixedFills){const clearance=G.clearance(original,net,fill.net);drawShape(c.base,fill.shape,half+clearance,fill.net);drawShape(c.thickBase,fill.shape,half+clearance+guard,fill.net);drawShape(c.viaBase,fill.shape,via.diameter/2+clearance,fill.net);await yieldNow();if(stopped())return c;}
         bases.set(key,c);
       }
       if(c.generation!==generation){
@@ -221,6 +314,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       for(const o of padShapes)if(o.shape.layer===layer&&o.pad.net!==net.id){let r=half+Math.max(clearanceOf(net),clearanceOf(rules.get(o.pad.net)));if(overlap(expanded(o.box,r),segmentBox)&&G.distanceSegmentShape(a[0],a[1],b[0],b[1],o.shape)<r-EPS)return false;}
       for(let i=0;i<board.traces.length;i++){const t=board.traces[i];if(t.net!==net.id&&t.layer===layer&&(!soft||i<original.traces.length)){let r=half+t.width/2+Math.max(clearanceOf(net),clearanceOf(rules.get(t.net)));if(overlap(expanded(bboxPoints(t.points),r),segmentBox))for(let j=1;j<t.points.length;j++)if(G.distanceSegments(a,b,t.points[j-1],t.points[j])<r-EPS)return false;}}
       for(let i=0;i<board.vias.length;i++){const v=board.vias[i];if(v.net!==net.id&&v.layers.includes(layer)&&(!soft||i<original.vias.length)){let r=half+v.diameter/2+Math.max(clearanceOf(net),clearanceOf(rules.get(v.net)));if(segmentDistance(v.x,v.y,a,b)<r-EPS)return false;}}
+      for(const fill of fixedFills)if(fill.layer===layer&&fill.net!==net.id){const r=half+G.clearance(original,net,fill.net);if(overlap(expanded(fill.bounds,r),segmentBox)&&G.distanceSegmentShape(a[0],a[1],b[0],b[1],fill.shape)<r-EPS)return false;}
       for(const k of original.keepouts||[])if(k.kind!=='via'&&(!k.layers||k.layers.includes(layer))){let r=half+(k.clearance??clearanceOf(net));if(overlap(expanded(G.shapeBounds(k.shape),r),segmentBox)&&G.distanceSegmentShape(a[0],a[1],b[0],b[1],k.shape)<r-EPS)return false;}
       return true;
     }
@@ -286,7 +380,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       return 0;
     }
     function groupSeeds(group,net,c,soft=false,softPenalty=80){
-      let seeds=new Map(),points=group.points||[],layers=traceLayers(net);
+      const fillItems=(group.items||[]).filter(item=>item.kind==='fill').map(item=>board.copperFills?.[item.index]).filter(Boolean);
+      // The boundary can have thousands of vertices. Attach near the pads
+      // being connected, rather than rasterising the entire plane as goals.
+      let seeds=new Map(),points=fillItems.length?(group.items||[]).filter(item=>item.kind!=='fill').flatMap(item=>item.points||[]):group.points||[],layers=traceLayers(net);
       for(const p of points){spatial('Finding route attachment · '+net.name,{stage:'route-attachment',netId:net.id,netName:net.name},()=>({kind:'check',points:[p.slice(0,3)],label:'Current route attachment'}),finishing?'finishing':'routing');const padLayer=p[2]??0,via=layers.includes(padLayer)?null:endpointVia(p,net,c,soft);
         const sourceLayers=layers.includes(padLayer)?[padLayer]:via?layers.filter(l=>via.layers.includes(l)):[];
         const viaCost=via?searchViaCost(net)+(soft?endpointViaPenalty(via,net,softPenalty):0):0;
@@ -305,6 +402,20 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
           }
         }
         for(const anchor of anchors){let at=anchor.at,gx=Math.round((at[0]-bx)/step),gy=Math.round((at[1]-by)/step),anchorCost=length({points:anchor.bridge})+viaCost+(soft?bridgePenalty(anchor.bridge,l,net,c,softPenalty):0);for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){let x=gx+dx,y=gy+dy;if(x<0||x>=nx||y<0||y>=ny)continue;let id=idx(x,y,l),v=xy(id);if(allowed(c.base,id,net.id)&&(soft||allowed(c.dyn,id,net.id))&&staticSegmentClear(at,v,l,net,soft)){let connector=[[at[0],at[1]],[v[0],v[1]]],bridge=anchor.bridge.concat([[v[0],v[1]]]),cost=anchorCost+length({points:connector})+(soft?bridgePenalty(connector,l,net,c,softPenalty):0);let old=seeds.get(id);if(!old||cost<old.cost)seeds.set(id,{point:p,bridge,cost,via});}}}
+        }
+      }
+      for(const fill of fillItems){
+        if(!layers.includes(fill.layer))continue;
+        const shape={type:'polygon',points:fill.points,holes:fill.holes||[],layer:fill.layer};
+        const pads=original.pads.filter(pad=>pad.net===net.id),origins=[];
+        for(const pad of pads){const nearest=G.nearestPointOnShape(pad.x,pad.y,shape);origins.push(nearest);if(G.pointInShape(pad.x,pad.y,shape))origins.push([pad.x,pad.y]);}
+        for(const origin of origins){const gx=Math.round((origin[0]-bx)/step),gy=Math.round((origin[1]-by)/step);
+          for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){const x=gx+dx,y=gy+dy;if(x<0||x>=nx||y<0||y>=ny)continue;const id=idx(x,y,fill.layer),p=xy(id);
+            if(!G.pointInShape(p[0],p[1],shape)||!allowed(c.base,id,net.id)||!soft&&!allowed(c.dyn,id,net.id))continue;
+            // A zero-length attachment represents existing conductive copper,
+            // not an invented path across a pour's holes or exclusions.
+            seeds.set(id,{point:p,bridge:[[p[0],p[1]]],cost:0});
+          }
         }
       }
       // A legal pad can be narrower than the nominal trace, or nearby copper
@@ -432,7 +543,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       const before=stats(board,true);if(stopped())return null;
       const routeVias=copper.vias.filter(v=>!board.vias.some(w=>w.net===v.net&&Math.hypot(w.x-v.x,w.y-v.y)<EPS));
       const proposal={...board,traces:board.traces.concat(copper.traces),vias:board.vias.filter(v=>v!==via).concat(routeVias)};
-      const primitives=G.copper(proposal).primitives,indices=original.layers.map(l=>G.spatialIndex(primitives.filter(p=>p.layer===l.index),indexSize));
+      const primitives=G.copper(proposal).primitives.filter(p=>!mutableFill(p)),indices=original.layers.map(l=>G.spatialIndex(primitives.filter(p=>p.layer===l.index),indexSize));
       const def=original.viaDefs.find(d=>d.name===via.padstack);
       const clearShape=(shape,isVia=false)=>{
         if(!G.shapeInsideBoard(shape,original,boundaryEdges))return false;
@@ -537,7 +648,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       order.sort((a,b)=>densityScores.get(b.id)-densityScores.get(a.id));
     }
 
-    async function routeNet(net,softAllowed,keepExisting=false,localOnly=false,allowLocalTransactions=true){measurement?.count('netAttempts',1,net.id);detail('Routing '+net.name+' · attempt '+(routeActivity.attempt||1),{stage:'net',netId:net.id,netName:net.name},finishing?'finishing':'routing');if(stopped())return{failed:true,ripped:new Set()};let connections=keepExisting?connectivity(board):null;if(finishing&&connections&&pruneGeneratedIslands(connections)){await yieldNow();if(stopped())return{failed:true,ripped:new Set()};connections=connectivity(board);}let c=await getRaster(net);if(stopped())return{failed:true,ripped:new Set()};let groups=(keepExisting?(connections.components.find(c=>c.net===net.id)?.groups||[]):(groupsByNet.get(net.id)||[])).filter(g=>g.points&&g.points.length&&(!inaccessibleGroups.has(net.id)||hasLayerAccess(g,net)));if(groups.length<=1)return{failed:false,ripped:new Set()};let ordered=groups.map(g=>({group:g,seeds:groupSeeds(g,net,c)}));ordered.sort((a,b)=>b.seeds.size-a.seeds.size);let root=ordered.shift(),targets=new Map(root.seeds),targetGroups=[root.group],remaining=ordered,ripped=new Set(),failed=false;
+    async function routeNet(net,softAllowed,keepExisting=false,localOnly=false,allowLocalTransactions=true){measurement?.count('netAttempts',1,net.id);detail('Routing '+net.name+' · attempt '+(routeActivity.attempt||1),{stage:'net',netId:net.id,netName:net.name},finishing?'finishing':'routing');if(stopped())return{failed:true,ripped:new Set()};let connections=keepExisting||hasZones(board)?connectivity(board):null;if(finishing&&connections&&pruneGeneratedIslands(connections)){await yieldNow();if(stopped())return{failed:true,ripped:new Set()};connections=connectivity(board);}let c=await getRaster(net);if(stopped())return{failed:true,ripped:new Set()};let groups=(connections?(connections.components.find(c=>c.net===net.id)?.groups||[]):(groupsByNet.get(net.id)||[])).filter(g=>g.points&&g.points.length&&(!inaccessibleGroups.has(net.id)||hasLayerAccess(g,net)));if(groups.length<=1)return{failed:false,ripped:new Set()};let ordered=groups.map(g=>({group:g,seeds:groupSeeds(g,net,c)}));ordered.sort((a,b)=>b.seeds.size-a.seeds.size);let root=ordered.shift(),targets=new Map(root.seeds),targetGroups=[root.group],remaining=ordered,ripped=new Set(),failed=false;
       // The route tree grows monotonically within this net attempt. Keep the
       // exact nearest distance and compare only newly added points after each
       // branch, rather than rescanning the full tree in every sort comparison.
@@ -598,6 +709,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const completeOrders=new Set();
     const viaKey=v=>JSON.stringify([v.net,v.padstack,v.x,v.y,v.diameter,v.layers]);
     const originalViaKeys=new Set(original.vias.map(viaKey));
+    const refinementOptions=hasZones(original)?{...options,preserveTraceCount:original.traces.length,preserveViaCount:original.vias.length}:options;
     function restoreRoutingPrefix(candidate){
       const restored=copy(candidate);
       restored.traces=[...copy(original.traces),...restored.traces.slice(original.traces.length)];
@@ -655,7 +767,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     if(options.optimize!==false&&optimizer&&!stopped()){
       counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
       emit({type:'progress',phase:'optimizing',message:'Refining the checked route'});
-      const optimized=await optimizer.optimize(copy(best),options,emit,stopped,refinementWork);let candidate=stats(optimized,true);
+      const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork);let candidate=stats(optimized,true);
       if(scoreBetter(candidate,bestStats)){best=optimized;bestStats=candidate;await checkpoint();}
       if(!stopped()){counters.refinement.completed++;counters.refinement.status=refinementLimit>1?'pending':'done';counters.work=null;reportCounters('optimizing');}
     }
@@ -734,7 +846,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
         if(bestStats.unrouted<beforeFinishing&&options.optimize!==false&&optimizer&&!stopped()){
           counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
           emit({type:'progress',phase:'optimizing',message:'Refining the repaired route'});
-          const optimized=await optimizer.optimize(copy(best),options,emit,stopped,refinementWork),measured=stats(optimized,true);
+          const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork),measured=stats(optimized,true);
           if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
           if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
         }

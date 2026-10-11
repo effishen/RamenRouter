@@ -11,6 +11,8 @@
   <script src="scripts/demo-data.js" defer></script>
   <script src="scripts/dsn.js" defer></script>
   <script src="scripts/geometry.js" defer></script>
+  <script src="scripts/clipper.js" defer></script>
+  <script src="scripts/copper.js" defer></script>
   <script src="scripts/optimizer.js" defer></script>
   <script src="scripts/fanout.js" defer></script>
   <script src="scripts/router.js" defer></script>
@@ -27,7 +29,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">PCB ROUTING WORKBENCH</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">BROWSER ENGINE</span><strong id="engineVersion">Ramen JS 0.2.22</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">BROWSER ENGINE</span><strong id="engineVersion">Ramen JS 0.3.0</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Starting browser engine</span></div>
     <button class="icon-button help-button" id="helpButton" title="About this workbench" aria-label="About this workbench">?</button>
   </header>
@@ -56,18 +58,26 @@
         <button class="net-layers-button" id="netLayersButton" type="button" aria-haspopup="dialog" disabled>Routing rules <span aria-hidden="true">›</span></button>
         <p id="netLayersSummary">Choose layers and prioritize shorter routes for each net.</p>
       </div>
-
-
+      <div class="copper-setting" id="copperSetting" hidden>
+        <div class="section-rule"></div>
+        <div class="section-kicker">COPPER FILLS <span class="edition-tag">NEW</span></div>
+        <button id="copperButton" class="net-layers-button" type="button" aria-haspopup="dialog" disabled>Copper fills <span aria-hidden="true">›</span></button>
+        <p id="copperSummary">Create a copper area connected to a net.</p>
+      </div>
       </div>
       <div class="run-controls"><p class="net-layer-conflict" id="netLayerConflict" role="status" hidden></p><button class="primary-button" id="runButton" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6V4Z" fill="currentColor"/></svg><span id="runLabel">Start routing</span><span class="button-shortcut">↵</span></button><button class="stop-button" id="stopButton" hidden><span class="stop-square"></span>Stop job</button><button class="force-stop-button" id="forceStopButton" hidden>Force stop</button><button class="view-stopped-button" id="viewStoppedResult" type="button" hidden>View best result</button><p class="run-hint" id="runHint">Load a board to begin.</p></div>
       <div class="sidebar-foot"><span class="lock-icon" aria-hidden="true">⌁</span> Your board stays on this computer.</div>
     </aside>
 
     <section class="board-section" aria-label="Board preview">
-      <div class="board-toolbar"><div class="board-title"><span class="board-title-dot"></span><strong>Board preview</strong><span class="preview-tag">READ ONLY</span></div><div class="view-controls"><button id="zoomOut" class="icon-button" title="Zoom out" aria-label="Zoom out">−</button><span id="zoomValue">100%</span><button id="zoomIn" class="icon-button" title="Zoom in" aria-label="Zoom in">+</button><span class="toolbar-divider"></span><button id="fitButton" class="toolbar-button" title="Fit board (F)"><svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M2 6V2h4m6 0h4v4M2 12v4h4m6 0h4v-4" stroke="currentColor" stroke-width="1.4"/></svg>Fit</button></div></div>
+      <div class="board-toolbar"><div class="board-title"><span class="board-title-dot"></span><strong>Board preview</strong><span class="preview-tag" id="previewModeTag">BOARD VIEW</span></div><div class="view-controls"><button id="zoomOut" class="icon-button" title="Zoom out" aria-label="Zoom out">−</button><span id="zoomValue">100%</span><button id="zoomIn" class="icon-button" title="Zoom in" aria-label="Zoom in">+</button><span class="toolbar-divider"></span><button id="fitButton" class="toolbar-button" title="Fit board (F)"><svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M2 6V2h4m6 0h4v4M2 12v4h4m6 0h4v-4" stroke="currentColor" stroke-width="1.4"/></svg>Fit</button></div></div>
       <div class="canvas-wrap" id="canvasWrap">
         <canvas id="boardCanvas" aria-label="Interactive PCB preview. Drag to pan; scroll to zoom. Press F to fit." tabindex="0"></canvas>
         <canvas id="activityCanvas" aria-hidden="true"></canvas>
+        <section id="copperDrawToolbar" class="copper-draw-toolbar" aria-label="Draw copper area" hidden>
+          <div><strong id="copperDrawTitle">Draw copper boundary</strong><span id="copperDrawInstruction" role="status" aria-live="polite">Click to place points. Finish closes the shape.</span></div>
+          <div class="copper-draw-actions"><button id="undoCopperPoint" type="button">Undo point</button><button id="finishCopperDrawing" type="button">Finish shape</button><button id="cancelCopperDrawing" type="button">Cancel</button></div>
+        </section>
         <div class="connection-activity-label" id="connectionActivityLabel" hidden><strong id="activityVisualTitle">Engine activity</strong><span id="activityVisualDetail">No location reported for this stage</span></div>
         <div class="empty-board" id="emptyBoard"><div class="empty-board-art" aria-hidden="true"><svg viewBox="0 0 190 135" fill="none"><rect x="25" y="14" width="140" height="104" rx="10" stroke="currentColor" stroke-width="1.4"/><rect x="74" y="45" width="44" height="43" rx="3" stroke="currentColor" stroke-width="1.4"/><path d="M82 45V33H47v16m45-4V26h48v16m-22 13h24v39h-13M118 68h34M106 88v17H63V84m22 4v8H46V66m28-10H60v15" stroke="currentColor" stroke-width="1.4"/><circle cx="47" cy="52" r="4" stroke="currentColor"/><circle cx="140" cy="46" r="4" stroke="currentColor"/><circle cx="46" cy="62" r="4" stroke="currentColor"/><circle cx="63" cy="80" r="4" stroke="currentColor"/><circle cx="60" cy="75" r="4" stroke="currentColor"/><circle cx="125" cy="94" r="4" stroke="currentColor"/><circle cx="155" cy="68" r="3" stroke="currentColor"/></svg></div><span class="eyebrow">LOCAL ENGINE · PRECISE CONTROL</span><h1>Your next route starts here.</h1><p>Bring in a DSN board, choose your settings,<br>and let RamenRouter get to work.</p><div class="empty-keys"><kbd>SCROLL</kbd> Zoom <span>·</span> <kbd>DRAG</kbd> Pan <span>·</span> <kbd>F</kbd> Fit</div></div>
         <div class="board-busy" id="boardBusy" hidden><span class="spinner"></span><span>Loading board geometry</span></div>
@@ -132,16 +142,18 @@
       <div class="section-rule"></div>
       <div class="section-kicker">VISIBLE LAYERS <span id="layerCount" class="muted-count">0</span></div>
       <div id="layersList" class="layers-list"><p class="muted-empty">Board layers appear after import.</p></div>
-      <div class="view-options"><label class="checkbox-row view-option"><input type="checkbox" id="showPads" checked><span>Pads & vias</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showAirwires" title="Guide lines between pad groups that still need a connection" checked><span>Airwires</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showLiveWork" checked><span>Live work</span></label></div>
+      <div class="view-options"><label class="checkbox-row view-option"><input type="checkbox" id="showPads" checked><span>Pads & vias</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showAirwires" title="Guide lines between pad groups that still need a connection" checked><span>Airwires</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showCopper" checked><span>Copper fills</span></label><label class="checkbox-row view-option"><input type="checkbox" id="showLiveWork" checked><span>Live work</span></label></div>
       </div>
       <div class="export-controls">
       <div class="section-kicker">EXPORT RESULTS</div>
       <p class="export-ready-message" id="exportReadyMessage" role="status" aria-live="polite" hidden>All connections routed. Your routing session is ready to export.</p>
       <button id="downloadSes" class="export-button" disabled><span class="export-file-type">SES</span><span><strong>Routing session</strong><small>Import into your PCB editor</small></span><span class="download-arrow" aria-hidden="true">↓</span></button>
       <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Engine log <span aria-hidden="true">↓</span></button></div>
+      <button id="downloadCopper" class="run-report-button" type="button" hidden disabled>Save copper settings <span aria-hidden="true">↓</span></button>
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
+      <p id="copperExportNote" class="copper-export-note" hidden>These temporary fills guide routing here. Your exported DSN keeps only the copper that came with your file, and SES carries tracks and vias. Use matching copper pours in your PCB editor, refill them, and check connectivity.</p>
       <p class="export-note">Check clearances, connectivity and design rules in your PCB editor before manufacturing.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.2.22</span><span>Independent browser engine · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.0</span><span>Independent browser engine · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -214,16 +226,71 @@
     <p id="routingRulesError" class="net-layer-validation" role="alert" hidden></p>
     <div class="net-layer-actions"><button id="cancelNetLayers" type="button">Cancel</button><button id="applyNetLayers" type="button" disabled>Apply rules</button></div>
   </dialog>
+  <dialog id="copperDialog" class="copper-dialog" aria-labelledby="copperTitle" aria-describedby="copperDescription">
+    <div class="dialog-header"><span class="section-kicker">COPPER WHERE YOU NEED IT</span><button id="closeCopper" class="icon-button" type="button" aria-label="Close copper fills">×</button></div>
+    <h2 id="copperTitle">Copper fills</h2>
+    <p id="copperDescription">Build temporary copper areas to guide routing. Fill a layer or draw boundaries and cutouts. Use matching copper pours in your PCB editor to complete the plane connections.</p>
+    <div class="copper-manager">
+      <section class="copper-zone-list-panel" aria-label="Copper areas">
+        <div class="copper-list-heading"><h3>Your copper areas</h3><span id="copperZoneCount">0</span></div>
+        <div id="copperZoneList" class="copper-zone-list" role="list"></div>
+        <input id="copperSettingsFileInput" type="file" accept=".json,application/json" hidden>
+        <div class="copper-add-actions"><button id="addWholeCopper" type="button">Add whole-board fill</button><button id="addDrawnCopper" type="button">Draw a copper area</button><button id="loadCopperSettings" type="button">Load copper settings</button></div>
+        <p class="copper-helper">Changes apply together when you choose <strong>Apply &amp; rebuild</strong>. Loading a saved settings file rebuilds its areas on this board.</p>
+      </section>
+      <section id="copperEditor" class="copper-editor" aria-labelledby="copperEditTitle" hidden>
+        <div class="copper-editor-heading"><h3 id="copperEditTitle">Area settings</h3><button id="deleteCopperZone" class="copper-delete-button" type="button">Delete area</button></div>
+        <form id="copperForm">
+          <div class="copper-fields">
+            <label class="copper-wide">Area name<input id="copperName" type="text" maxlength="100" placeholder="e.g. Ground plane"></label>
+            <label>Layer<select id="copperLayer" required></select></label>
+            <label>Net<select id="copperNet" required></select></label>
+            <label>Fill style<select id="copperStyle"><option value="solid">Solid</option><option value="grid45">Grid · 45°</option><option value="grid90">Grid · 90°</option></select></label>
+            <label>Pad connection<select id="copperPadConnection"><option value="spoke">Spokes (thermal relief)</option><option value="direct">Direct</option></select></label>
+            <label class="copper-checkbox"><input id="copperEnabled" type="checkbox" checked><span>Enable this fill</span></label>
+            <label class="copper-checkbox"><input id="copperKeepIslands" type="checkbox"><span>Keep unconnected islands</span></label>
+            <label>Clearance · mm<input id="copperClearance" type="number" min="0" step="any" required></label>
+            <label>Board edge clearance · mm<input id="copperEdgeClearance" type="number" min="0" step="any" required></label>
+            <label class="copper-thermal-field">Spoke gap · mm<input id="copperThermalGap" type="number" min="0.000001" step="any" required></label>
+            <label class="copper-thermal-field">Spoke width · mm<input id="copperSpokeWidth" type="number" min="0.000001" step="any" required></label>
+            <label class="copper-grid-field" hidden>Grid pitch · mm<input id="copperGridPitch" type="number" min="0.000001" step="any" required></label>
+            <label class="copper-grid-field" hidden>Grid line width · mm<input id="copperGridWidth" type="number" min="0.000001" step="any" required></label>
+          </div>
+        </form>
+        <p class="copper-helper">Clearance follows the net’s imported rule as a minimum. Spokes leave a gap around pads and connect them through short copper bridges.</p>
+        <section class="copper-shape-section" aria-label="Copper boundary"><div><h4>Boundary</h4><span id="copperBoundaryCount"></span></div><div class="copper-shape-actions"><button id="redrawCopperBoundary" type="button">Redraw boundary</button><button id="wholeCopperBoundary" type="button">Use board outline</button><button id="showCopperArea" type="button">Show on board</button></div></section>
+        <section class="copper-shape-section" aria-label="Areas without copper"><div><h4>Leave these areas clear</h4><button id="drawCopperCutout" type="button">Draw a cutout</button></div><div id="copperCutoutList" class="copper-cutout-list"></div><p class="copper-helper">Cutouts remove copper from this area only. Existing board keepouts and clearances are also respected.</p></section>
+      </section>
+      <p id="copperEmpty" class="copper-empty">No copper areas yet. Start with a whole-board fill, then choose its layer and net.</p>
+    </div>
+    <p id="copperTransferNote" class="copper-transfer-note">Temporary fills stay in RamenRouter. Exported DSN keeps only your file’s original copper; SES carries tracks and vias. Save a separate copper settings file to reuse these choices here. Use matching pours in your PCB editor, refill them and check connectivity before relying on plane connections.</p>
+    <p id="copperError" class="copper-error" role="alert" hidden></p>
+    <div class="copper-dialog-actions"><button id="cancelCopper" type="button">Cancel</button><button id="applyCopper" type="button">Apply &amp; rebuild</button></div>
+  </dialog>
+  <dialog id="copperExportDialog" class="copper-choice-dialog" aria-labelledby="copperExportTitle" aria-describedby="copperExportDescription">
+    <div class="dialog-header"><span class="section-kicker">KEEP YOUR ROUTING SETUP</span><button id="closeCopperExport" class="icon-button" type="button" aria-label="Cancel export">×</button></div>
+    <h2 id="copperExportTitle">Save your copper settings too?</h2>
+    <p id="copperExportDescription">These temporary copper areas helped route your board. Save their settings in a separate file so you can load them into RamenRouter next time.</p>
+    <p class="copper-transfer-note">Your exported DSN keeps only the copper that came with your original file. SES carries tracks and vias. In EasyEDA, use your matching copper pours, refill them and check connectivity. Routes that rely on a plane need that copper to make their connections.</p>
+    <div class="copper-choice-actions"><button id="saveCopperAndExport" type="button">Save settings &amp; export</button><button id="exportCopperRoutesOnly" type="button">Export routes only</button><button id="cancelCopperExport" type="button">Cancel</button></div>
+  </dialog>
+  <dialog id="copperLoadDialog" class="copper-choice-dialog" aria-labelledby="copperLoadTitle" aria-describedby="copperLoadDescription">
+    <div class="dialog-header"><span class="section-kicker">USE YOUR SAVED SETUP</span><button id="closeCopperLoad" class="icon-button" type="button" aria-label="Keep current copper settings">×</button></div>
+    <h2 id="copperLoadTitle">Load saved copper settings?</h2>
+    <p id="copperLoadDescription">If you saved copper settings for this board, choose that file to rebuild the same temporary areas in RamenRouter. Your PCB editor still supplies the final copper pours.</p>
+    <p class="copper-helper">Nothing is applied automatically. You can also load a settings file later from Copper fills.</p>
+    <div class="copper-choice-actions"><button id="loadPreviousCopper" type="button">Choose settings file</button><button id="skipPreviousCopper" type="button">Start without saved settings</button></div>
+  </dialog>
   <dialog id="clearRoutingDialog" class="clear-routing-dialog" aria-labelledby="clearRoutingTitle" aria-describedby="clearRoutingDescription clearRoutingFixed clearRoutingPreserved">
     <div class="dialog-header"><span class="section-kicker">START FRESH</span><button id="closeClearRouting" class="icon-button" type="button" aria-label="Cancel clearing routing">×</button></div>
     <h2 id="clearRoutingTitle">Clear routing &amp; start over?</h2>
     <p class="clear-routing-filename" id="clearRoutingFileName"></p>
     <p id="clearRoutingDescription">Remove <strong id="clearRoutingCounts"></strong> from the loaded board.</p>
     <p class="clear-routing-fixed" id="clearRoutingFixed" hidden></p>
-    <p id="clearRoutingPreserved">Components, pads, connections, board outline and design rules stay in place. Your original DSN file on disk is unchanged.</p>
+    <p id="clearRoutingPreserved">Components, pads, connections, copper areas, board outline and design rules stay in place. Copper areas are rebuilt. Your original DSN file on disk is unchanged.</p>
     <p>Download any result you want to keep first. Routing will stay stopped until you choose <strong>Start routing</strong>.</p>
     <div class="clear-routing-actions"><button id="cancelClearRouting" type="button" autofocus>Cancel</button><button id="confirmClearRouting" type="button">Clear all routing</button></div>
   </dialog>
-  <dialog id="aboutDialog"><div class="dialog-header"><span class="section-kicker">ABOUT RAMENROUTER</span><button id="closeAbout" class="icon-button" aria-label="Close about dialog">×</button></div><h2>Open a file.<br>Find a route.</h2><p>RamenRouter is a standalone PCB routing workbench with an independent JavaScript engine. It searches for routes in a browser worker and enforces imported net widths.</p><p>This is a routing and inspection tool. Export a Specctra DSN from your PCB editor, route it here, then import the SES result back into your editor.</p><div class="about-callout"><strong>Everything runs locally.</strong><p>Open index.html to begin. Your files, routing calculations and exports stay in the browser. No server, Java runtime, installer or internet connection is needed.</p></div><p class="about-small">Independent GPL-3.0 source and notices are included in this folder. The preview simplifies some board geometry; check exported results in your PCB editor before manufacturing.</p><button id="closeAboutBottom" class="primary-button">Back to the board</button></dialog>
+  <dialog id="aboutDialog"><div class="dialog-header"><span class="section-kicker">ABOUT RAMENROUTER</span><button id="closeAbout" class="icon-button" aria-label="Close about dialog">×</button></div><h2>Open a file.<br>Find a route.</h2><p>RamenRouter is a standalone PCB routing workbench with an independent JavaScript engine. It searches for routes in a browser worker and enforces imported net widths.</p><p>Export a Specctra DSN from your PCB editor, add copper areas and route it here. Import the SES tracks and vias back into your editor. If your routes use a copper plane, use matching pours in your PCB editor and refill them. Temporary copper areas from RamenRouter stay out of your exported board; save a separate settings file to reuse them here.</p><div class="about-callout"><strong>Everything runs locally.</strong><p>Open index.html to begin. Your files, routing calculations and exports stay in the browser. No server, Java runtime, installer or internet connection is needed.</p></div><p class="about-small">Independent GPL-3.0 source and notices are included in this folder. The preview simplifies some board geometry; check exported results in your PCB editor before manufacturing.</p><button id="closeAboutBottom" class="primary-button">Back to the board</button></dialog>
 </body>
 </html>

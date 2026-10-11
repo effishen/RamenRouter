@@ -60,7 +60,27 @@ function createRamenGeometry(onActivity=null) {
     for (const [p,q] of candidates) { const length=distance(p,q); if (!best || length < best.distance) best={distance:length,a:p,b:q}; }
     return best;
   }
-  function distanceSegments(a,b,c,d) { return closestSegmentPoints(point(a),point(b),point(c),point(d)).distance; }
+  // Distance-only checks do not need closest-point arrays. Preserve the exact
+  // projection arithmetic of closestSegmentPoints, including intersection EPS,
+  // so this fast path cannot change contact/clearance decisions.
+  function scalarEndpointDistance(x,y,ax,ay,dx,dy,den) {
+    const t=den?Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/den)):0;
+    return Math.hypot(x-(ax+t*dx),y-(ay+t*dy));
+  }
+  function distanceSegments(a,b,c,d) {
+    a=point(a);b=point(b);c=point(c);d=point(d);
+    const dx=b[0]-a[0],dy=b[1]-a[1],ex=d[0]-c[0],ey=d[1]-c[1],den=dx*ey-dy*ex;
+    if(Math.abs(den)>EPS*EPS){
+      const t=((c[0]-a[0])*ey-(c[1]-a[1])*ex)/den,u=((c[0]-a[0])*dy-(c[1]-a[1])*dx)/den;
+      if(t>=0&&t<=1&&u>=0&&u<=1)return 0;
+    }
+    const ab=dx*dx+dy*dy,cd=ex*ex+ey*ey;
+    let best=scalarEndpointDistance(a[0],a[1],c[0],c[1],ex,ey,cd);
+    let candidate=scalarEndpointDistance(b[0],b[1],c[0],c[1],ex,ey,cd);if(candidate<best)best=candidate;
+    candidate=scalarEndpointDistance(c[0],c[1],a[0],a[1],dx,dy,ab);if(candidate<best)best=candidate;
+    candidate=scalarEndpointDistance(d[0],d[1],a[0],a[1],dx,dy,ab);if(candidate<best)best=candidate;
+    return best;
+  }
   function pointInPolygon(x, y, polygon) {
     const p=[x,y]; let result=false;
     for (let i=0,j=polygon.length-1;i<polygon.length;j=i++) {
@@ -74,23 +94,28 @@ function createRamenGeometry(onActivity=null) {
     if (shape.type==='circle') return {minX:shape.cx-shape.r,minY:shape.cy-shape.r,maxX:shape.cx+shape.r,maxY:shape.cy+shape.r};
     const points=shape.type==='capsule' ? [shape.a,shape.b] : shape.points;
     const radius=shape.type==='capsule' ? shape.r : 0;
-    return {minX:Math.min(...points.map(p=>p[0]))-radius,minY:Math.min(...points.map(p=>p[1]))-radius,
-      maxX:Math.max(...points.map(p=>p[0]))+radius,maxY:Math.max(...points.map(p=>p[1]))+radius};
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const p of points){minX=Math.min(minX,p[0]);minY=Math.min(minY,p[1]);maxX=Math.max(maxX,p[0]);maxY=Math.max(maxY,p[1]);}
+    return {minX:minX-radius,minY:minY-radius,maxX:maxX+radius,maxY:maxY+radius};
   }
   function pointInShape(x,y,shape) {
     if (shape.type==='circle') return Math.hypot(x-shape.cx,y-shape.cy)<=shape.r+EPS;
     if (shape.type==='capsule') return distance([x,y],closestPointOnSegment([x,y],shape.a,shape.b))<=shape.r+EPS;
-    return pointInPolygon(x,y,shape.points);
+    if(!pointInPolygon(x,y,shape.points))return false;
+    for(const hole of shape.holes||[])if(pointInPolygon(x,y,hole)&&!hole.some((p,i)=>pointOnSegment([x,y],p,hole[(i+1)%hole.length])))return false;
+    return true;
   }
+  function polygonRings(shape){return [shape.points,...(shape.holes||[])];}
   function shapeCore(shape) {
     if (shape.type==='circle') { const p=[shape.cx,shape.cy]; return {points:[p],edges:[[p,p]],radius:shape.r,polygon:false}; }
     if (shape.type==='capsule') return {points:[shape.a,shape.b],edges:[[shape.a,shape.b]],radius:shape.r,polygon:false};
-    return {points:shape.points,edges:shape.points.map((p,i)=>[p,shape.points[(i+1)%shape.points.length]]),radius:0,polygon:true};
+    const rings=polygonRings(shape);
+    return {points:rings.flat(),edges:rings.flatMap(ring=>ring.map((p,i)=>[p,ring[(i+1)%ring.length]])),radius:0,polygon:true};
   }
   function closestShapePoints(a,b) {
     const ac=shapeCore(a),bc=shapeCore(b);
-    if (ac.polygon) for (const p of bc.points) if (pointInPolygon(p[0],p[1],ac.points)) return {distance:0,a:p,b:p};
-    if (bc.polygon) for (const p of ac.points) if (pointInPolygon(p[0],p[1],bc.points)) return {distance:0,a:p,b:p};
+    if (ac.polygon) for (const p of bc.points) if (pointInShape(p[0],p[1],a)) return {distance:0,a:p,b:p};
+    if (bc.polygon) for (const p of ac.points) if (pointInShape(p[0],p[1],b)) return {distance:0,a:p,b:p};
     let best={distance:Infinity,a:ac.points[0],b:bc.points[0]};
     for (const ae of ac.edges) for (const be of bc.edges) {
       const pair=closestSegmentPoints(ae[0],ae[1],be[0],be[1]);
@@ -114,15 +139,15 @@ function createRamenGeometry(onActivity=null) {
   function distancePointShape(x,y,shape) {
     if(shape.type==='circle')return Math.max(0,Math.hypot(x-shape.cx,y-shape.cy)-shape.r);
     if(shape.type==='capsule')return Math.max(0,distancePointSegment(x,y,shape.a,shape.b)-shape.r);
-    if(pointInPolygon(x,y,shape.points))return 0;
-    let best=Infinity;for(let i=0;i<shape.points.length;i++)best=Math.min(best,distancePointSegment(x,y,shape.points[i],shape.points[(i+1)%shape.points.length]));return best;
+    if(pointInShape(x,y,shape))return 0;
+    let best=Infinity;for(const ring of polygonRings(shape))for(let i=0;i<ring.length;i++)best=Math.min(best,distancePointSegment(x,y,ring[i],ring[(i+1)%ring.length]));return best;
   }
   function distanceSegmentShape(ax,ay,bx,by,shape) {
     const a=[ax,ay],b=[bx,by];
     if(shape.type==='circle')return Math.max(0,distancePointSegment(shape.cx,shape.cy,a,b)-shape.r);
     if(shape.type==='capsule')return Math.max(0,distanceSegments(a,b,shape.a,shape.b)-shape.r);
-    if(pointInPolygon(ax,ay,shape.points)||pointInPolygon(bx,by,shape.points))return 0;
-    let best=Infinity;for(let i=0;i<shape.points.length;i++){best=Math.min(best,distanceSegments(a,b,shape.points[i],shape.points[(i+1)%shape.points.length]));if(best<=EPS)return 0;}return best;
+    if(pointInShape(ax,ay,shape)||pointInShape(bx,by,shape))return 0;
+    let best=Infinity;for(const ring of polygonRings(shape))for(let i=0;i<ring.length;i++){best=Math.min(best,distanceSegments(a,b,ring[i],ring[(i+1)%ring.length]));if(best<=EPS)return 0;}return best;
   }
   function nearestPointOnShape(x,y,shape) { return closestShapePoints({type:'circle',cx:x,cy:y,r:0},shape).b; }
   function boxesOverlap(a,b,pad=0) { return a.minX<=b.maxX+pad && a.maxX+pad>=b.minX && a.minY<=b.maxY+pad && a.maxY+pad>=b.minY; }
@@ -185,6 +210,10 @@ function createRamenGeometry(onActivity=null) {
       const layers=v.layers||Array.from({length:(def?.toLayer??0)-(def?.fromLayer??0)+1},(_,n)=>n+(def?.fromLayer??0));
       add('via',i,v,layers.map(layer=>({type:'circle',cx:v.x,cy:v.y,r:(v.diameter??def?.diameter??0)/2,layer})),layers.map(layer=>[v.x,v.y,layer]));
     });
+    (board.copperFills||[]).forEach((fill,i)=>{
+      const shape={type:'polygon',points:fill.points,holes:fill.holes||[],layer:fill.layer};
+      add('fill',i,fill,[shape],fill.points.map(p=>[p[0],p[1],fill.layer]),fill.zoneId+':'+i);
+    });
     return {objects,primitives};
   }
   function indexing(board,primitives) {
@@ -213,7 +242,9 @@ function createRamenGeometry(onActivity=null) {
     }
     const components=[],airwires=[];let unrouted=0;
     for(const [key,groupMap] of byNet){
-      const groups=[...groupMap.values()];unrouted+=Math.max(0,groups.length-1);
+      // Unattached pour islands are optional copper, not terminals that must
+      // be routed. Separate islands touching different pads remain separate.
+      const groups=[...groupMap.values()].filter(group=>group.items.some(item=>item.kind!=='fill'));unrouted+=Math.max(0,groups.length-1);
       // Internal checks need the exact copper groups and connection count,
       // but do not need the visual minimum-spanning tree of airwires.
       if(groups.length>1&&options.airwires!==false){
@@ -277,7 +308,7 @@ function createRamenGeometry(onActivity=null) {
       ts.sort((x,y)=>x-y);for(let j=1;j<ts.length;j++){const t=(ts[j-1]+ts[j])/2;if(!pointInBoard(a[0]+dx*t,a[1]+dy*t,board))return false;}
     }
     // A polygon can entirely enclose a hole without its edges crossing the hole.
-    if(core.polygon)for(const hole of board.holes||[])for(const p of hole.points||hole)if(pointInPolygon(p[0],p[1],core.points))return false;
+    if(core.polygon)for(const hole of board.holes||[])for(const p of hole.points||hole)if(pointInShape(p[0],p[1],shape))return false;
     return true;
   }
   // This is a bounded terminal-access exception, not another routing layer.
@@ -324,7 +355,9 @@ function createRamenGeometry(onActivity=null) {
     const nets=new Map((board.nets||[]).map(n=>[netKey(n.id),n]));
     const allowedLayers=new Set((board.layers||[]).map((l,i)=>l.index??i));
     const netClearance=net=>Math.max(0,nets.get(netKey(net))?.routingClearance??nets.get(netKey(net))?.clearance??board.defaultClearance??0);
-    const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}));
+    const zoneRules=new Map((board.copperZones||[]).map(zone=>[zone.id,zone]));
+    const fillRule=(object,key)=>object.kind==='fill'?Math.max(0,...(object.item.zoneIds||[object.item.zoneId]).map(id=>zoneRules.get(id)?.[key]||0)):0;
+    const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}),...(board.copperZones||[]).map(z=>z.clearance||0));
     const violations=[],widthDeviations=[],seen=new Set();
     function violation(type,key,detail){if(seen.has(key))return;seen.add(key);violations.push({type,...detail});}
     for(const net of board.nets||[])if(!Number.isFinite(net.width)||net.width<=0||!Number.isFinite(net.clearance)||net.clearance<0)violation('invalid_rule',`nrule:${net.id}`,{net:net.id,width:net.width,clearance:net.clearance});
@@ -334,7 +367,7 @@ function createRamenGeometry(onActivity=null) {
       if(q.object.uid<=p.object.uid)continue;
       if(observesActivity)activityAt(activity,p,q,undefined,undefined,'Checking copper clearance');
       const same=netKey(p.net)!==null&&netKey(p.net)===netKey(q.net),actual=distanceShapes(p.shape,q.shape);
-      if(!same){const required=clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net)));if(actual+EPS<required||actual<=EPS)
+      if(!same){const required=Math.max(clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net))),fillRule(p.object,'clearance'),fillRule(q.object,'clearance'));if(actual+EPS<required||actual<=EPS)
         violation(actual<=EPS?'short':'clearance',`c:${p.object.uid}:${q.object.uid}:${p.layer}`,{layer:p.layer,a:{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net},b:{kind:q.object.kind,index:q.object.index,id:q.object.id,net:q.net},actual,required});
       }else if(actual<=EPS){
         const via=p.object.kind==='via'?p.object:q.object.kind==='via'?q.object:null;
@@ -359,15 +392,21 @@ function createRamenGeometry(onActivity=null) {
       if(def&&v.layers){const expected=Array.from({length:def.toLayer-def.fromLayer+1},(_,i)=>i+def.fromLayer);if(expected.length!==v.layers.length||expected.some(l=>!v.layers.includes(l)))violation('via_span',`p:v:${index}`,{index,actual:v.layers,required:expected});}
       if(net?.viaName&&v.padstack!==net.viaName)violation('via_rule',`r:v:${index}`,{index,padstack:v.padstack,required:net.viaName});
     }
+    for(const [index,fill] of (board.copperFills||[]).entries()){
+      const net=nets.get(netKey(fill.net));
+      if(net?.useLayers&&!net.useLayers.includes(fill.layer))violation('inactive_layer',`l:f:${index}`,{kind:'fill',index,layer:fill.layer,net:fill.net});
+      const rings=[fill.points,...(fill.holes||[])];
+      if(rings.some(ring=>!Array.isArray(ring)||ring.length<3||ring.some(p=>!Array.isArray(p)||p.length<2||!Number.isFinite(p[0])||!Number.isFinite(p[1]))))violation('invalid_geometry',`i:f:${index}`,{kind:'fill',index});
+    }
     const edges=boundaryEdges(board);
     let outlineCount=0;
     for(const p of primitives){
       if(observesActivity)activityAt(activity,p,null,++outlineCount,primitives.length,'Checking copper against the board outline');
-      if(!shapeInsideBoard(p.shape,board,edges))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
+      if(!shapeInsideBoard(p.shape,board,edges,Math.max(board.edgeClearance||0,fillRule(p.object,'edgeClearance'))))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
       for(const [index,k] of (board.keepouts||[]).entries()){
         if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.object.kind!=='via')continue;
         if(observesActivity)activityAt(activity,p,{shape:k.shape,layer:p.layer},outlineCount,primitives.length,'Checking copper against a keepout');
-        const required=k.clearance??netClearance(p.net),actual=distanceShapes(p.shape,k.shape);
+        const required=Math.max(k.clearance??netClearance(p.net),fillRule(p.object,'clearance')),actual=distanceShapes(p.shape,k.shape);
         if(actual+EPS<required||actual<=EPS)violation('keepout',`k:${p.object.uid}:${index}:${p.layer}`,{kind:p.object.kind,index:p.object.index,keepout:index,net:p.net,layer:p.layer,actual,required});
       }
     }
@@ -383,6 +422,7 @@ function createRamenGeometry(onActivity=null) {
       traceLengthMm:traceLength*(board.units?.mmPerUnit??1),clearanceViolations:validation.clearanceViolations,drcChecked:true,
       belowNominalWidthTraceCount:validation.belowNominalWidthTraceCount,widthRulesChecked:true,
       totalViolations:validation.totalViolations,viaInPadViolations:validation.viaInPadViolations,outlineViolations:validation.outlineViolations,keepoutViolations:validation.keepoutViolations,
+      copperZoneCount:(board.copperZones||[]).length,copperFillCount:(board.copperFills||[]).length,
       netCount:(board.nets||[]).length,componentCount:new Set((board.pads||[]).map(p=>p.component)).size,layerCount:(board.layers||[]).length};
   }
   return {EPS,distance,distancePointSegment,pointInPolygon,pointInShape,pointInBoard,pointOnSegment,segmentIntersection,closestPointOnSegment,

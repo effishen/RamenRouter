@@ -72,7 +72,7 @@ function createRamenAdvisor(geo) {
       }
     }
     if(options.includeIncomplete===false||items.length>=limit)return finish({items,limitedComponentLabels,units:'mm',note});
-    const connectivity=geo.connectivity(board),incomplete=connectivity.components.filter(c=>c.groups.length>1);
+    const connectivity=options.connection||geo.connectivity(board),incomplete=connectivity.components.filter(c=>c.groups.length>1);
     if(!incomplete.length)return finish({items,limitedComponentLabels,units:'mm',note});
     const padCopper=geo.copper({pads:board.pads||[],traces:[],vias:[]}),padIndex=index(padCopper.primitives);
     const byId=new Map((board.pads||[]).map(p=>[String(p.id),p])),candidates=[];

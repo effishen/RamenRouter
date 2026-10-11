@@ -1,5 +1,5 @@
 /* Checked off-grid fanout for the browser engine. GPL-3.0. */
-function createRamenFanout(geometry, yieldTask) {
+function createRamenFanout(geometry, yieldTask, copper) {
   'use strict';
   const G=geometry,EPS=1e-7,copy=x=>JSON.parse(JSON.stringify(x));
   const dot=(p,v)=>p[0]*v[0]+p[1]*v[1];
@@ -17,8 +17,10 @@ function createRamenFanout(geometry, yieldTask) {
     const measurement=yieldTask?.measurement,finishFanout=measurement?.begin('fanout');
     const candidatesByNet=measurement?new Map():null;
     let combinations=0;
+    const fillSignatures=new WeakMap();
+    function refreshFills(board){if(!(board.copperZones||[]).length)return;if(!copper?.build)throw new Error('Copper-fill fanout support is not loaded.');const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;board.copperFills=copper.build(board,options);fillSignatures.set(board,signature);}
     const flush=()=>{if(!measurement)return;for(const [netId,count]of candidatesByNet)measurement.count('fanoutCandidates',count,netId);candidatesByNet.clear();if(combinations){measurement.count('fanoutCombinations',combinations);combinations=0;}};
-    const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
+    const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     const clock=typeof yieldTask?.now==='function'?yieldTask.now:Date.now;
     const board=copy(input),log=[],started=clock(),deadline=yieldTask?.managesBudget?Infinity:started+(options.timeoutMinutes||30)*60000;
@@ -41,8 +43,8 @@ function createRamenFanout(geometry, yieldTask) {
     const nets=new Map(board.nets.map(n=>[n.id,n])),defs=new Map(board.viaDefs.map(v=>[v.name,v]));
     const traceLayers=net=>net.useLayers||board.layers.map(l=>l.index);
     const padCounts=new Map(board.nets.map(n=>[n.id,board.pads.filter(p=>p.net===n.id).length]));
-    const validate=()=>{const finish=measurement?.begin('checking');try{return G.validate(board);}finally{finish?.();}};
-    const baseValidation=validate(),edges=G.boundaryEdges(board),primitives=G.copper(board).primitives;
+    const validate=()=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.validate(board);}finally{finish?.();}};
+    const baseValidation=validate(),edges=G.boundaryEdges(board),primitives=G.copper(board).primitives.filter(p=>!(p.object.kind==='fill'&&p.object.item.zoneId!=null&&!p.object.item.fixed&&!p.object.item.imported));
     if(options.viaInPad===false&&baseValidation.viaInPadViolations){const error=new Error('Existing vias overlap SMD pads while vias in SMD pads are disabled. Clear routing & start over, or enable vias in SMD pads before routing.');error.code='VIA_IN_PAD_CONFLICT';throw error;}
     const span=Math.max(board.bounds.maxX-board.bounds.minX,board.bounds.maxY-board.bounds.minY),cell=Math.max(span/60,.01);
     const indices=new Map(board.layers.map(l=>[l.index,G.spatialIndex([],cell)]));

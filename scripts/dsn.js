@@ -44,6 +44,76 @@ function createRamenDSN() {
     const shorterNets=nets.filter(net=>net.preferShort===true).map(net=>net.name);
     return shorterNets.length?'; RamenRouter routing rules v1: '+JSON.stringify({shorterNets})+'\n':'';
   }
+  const copperPrefix = 'RamenRouter copper fills v1:';
+  const copperDimensions=['clearance','edgeClearance','thermalGap','spokeWidth','gridPitch','gridWidth'];
+  const copperUnitScales={mm:1,mil:0.0254,inch:25.4,um:0.001,cm:10};
+  const copperAssociationValid=value=>value===null||(typeof value==='string'&&value.length>0&&value.length<=100)||(Array.isArray(value)&&value.length>0&&value.length<=64&&new Set(value).size===value.length&&value.every(id=>typeof id==='string'&&id.length>0&&id.length<=100));
+  function copperMetadataRead(text) {
+    let i=0, metadata=null;
+    while(i<text.length) {
+      if(/\s/.test(text[i])){i++;continue;}
+      if(text[i]!==';'&&!(text[i]==='#'&&(i===0||text[i-1]==='\n')))break;
+      const start=++i;while(i<text.length&&text[i]!=='\n')i++;
+      const comment=text.slice(start,i).trim();
+      if(!comment.startsWith('RamenRouter copper fills'))continue;
+      if(metadata!==null)fail('Duplicate RamenRouter copper fills metadata.');
+      if(!comment.startsWith(copperPrefix))fail('Unsupported RamenRouter copper fills metadata version.');
+      if(comment.length>2*1024*1024)fail('Copper fills metadata exceeds 2 MiB.');
+      try{metadata=JSON.parse(comment.slice(copperPrefix.length));}catch(_){fail('Malformed RamenRouter copper fills metadata.');}
+      if(!metadata||typeof metadata!=='object'||Array.isArray(metadata)||Object.keys(metadata).length!==2||!Array.isArray(metadata.zones)||!Array.isArray(metadata.fillZones)||metadata.zones.length>64||metadata.fillZones.length>100000||metadata.fillZones.some(value=>!copperAssociationValid(value)))fail('Invalid RamenRouter copper fills metadata.');
+    }
+    return metadata;
+  }
+  function copperZonesValidate(board, zones, named=false) {
+    if(!Array.isArray(zones)||zones.length>64)fail('Copper zones must be a list of at most 64 zones.');
+    const ids=new Set(), netByName=new Map(board.nets.map(net=>[net.name,net.id])), layerByName=new Map(board.layers.map(layer=>[layer.name,layer.index]));
+    const fields=['id','name','net','layer','points','cutouts','style','keepIslands','padConnection','clearance','edgeClearance','thermalGap','spokeWidth','gridPitch','gridWidth','enabled'];
+    let total=0;
+    const contour=(values,what)=>{
+      if(!Array.isArray(values)||values.length>2048||values.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>1e9)))fail('Invalid '+what+' coordinates.');
+      if((total+=values.length)>100000)fail('Copper zones have more than 100,000 corners.');
+      return polygon(values.map(p=>p.slice()),what);
+    };
+    return zones.map(zone=>{
+      if(!zone||typeof zone!=='object'||Array.isArray(zone)||Object.keys(zone).some(key=>!fields.includes(key)))fail('Invalid copper zone fields.');
+      if(typeof zone.id!=='string'||!zone.id||zone.id.length>100||ids.has(zone.id))fail('Copper zone IDs must be unique nonempty strings.');
+      ids.add(zone.id);
+      const net=named?netByName.get(zone.net):zone.net,layer=named?layerByName.get(zone.layer):zone.layer;
+      if(!Number.isInteger(net)||!board.nets.some(item=>item.id===net)||!Number.isInteger(layer)||!board.layers.some(item=>item.index===layer))fail('Copper zone '+zone.id+' needs a known net and layer.');
+      const netInfo=board.nets.find(item=>item.id===net),name=zone.name===undefined?zone.id:zone.name;
+      if(typeof name!=='string'||name.length>100)fail('Invalid copper zone name.');
+      const style=zone.style===undefined?'solid':zone.style,padConnection=zone.padConnection===undefined?'spoke':zone.padConnection;
+      if(!['solid','grid45','grid90'].includes(style)||!['direct','spoke'].includes(padConnection))fail('Unsupported copper fill or pad connection style.');
+      for(const key of ['enabled','keepIslands'])if(zone[key]!==undefined&&typeof zone[key]!=='boolean')fail('Copper zone '+key+' must be true or false.');
+      if(zone.cutouts!==undefined&&(!Array.isArray(zone.cutouts)||zone.cutouts.length>64))fail('Invalid copper zone cutout list.');
+      const out={id:zone.id,name,net,layer,points:contour(zone.points,'copper zone'),cutouts:(zone.cutouts||[]).map(poly=>contour(poly,'copper cutout')),style,keepIslands:zone.keepIslands===true,padConnection,enabled:zone.enabled!==false};
+      const scale=board.units?.mmPerUnit||1,minimumWidth=Math.max(netInfo.width||0,0.25/scale),clearance=Math.max(board.defaultClearance||0,netInfo.clearance||0);
+      const defaults={clearance,edgeClearance:Math.max(board.edgeClearance||0,board.defaultClearance||0),thermalGap:clearance,spokeWidth:minimumWidth,gridPitch:Math.max((zone.gridWidth===undefined?minimumWidth:zone.gridWidth)*4,1/scale),gridWidth:minimumWidth};
+      for(const key of Object.keys(defaults)){
+        const value=zone[key]===undefined?defaults[key]:zone[key];
+        if(typeof value!=='number'||!Number.isFinite(value)||value<0||Math.abs(value)>1e9||(['spokeWidth','gridPitch','gridWidth'].includes(key)&&value<=0))fail('Invalid copper zone '+key+'.');
+        out[key]=value;
+      }
+      if(out.gridWidth>out.gridPitch)fail('Copper grid width cannot exceed its pitch.');
+      return out;
+    });
+  }
+  function copperMetadataWrite(board) {
+    const zones=copperZonesValidate(board,board.copperZones||[]),fills=(board.copperFills||[]).filter(fill=>!fill._dsnPlane);
+    if(!zones.length)return '';
+    const netNames=new Map(board.nets.map(net=>[net.id,net.name])),layerNames=new Map(board.layers.map(layer=>[layer.index,layer.name])),ids=new Set(zones.map(zone=>zone.id));
+    const association=fill=>{
+      if(fill.imported===true)return null;
+      const regionIds=fill.zoneIds?.length?fill.zoneIds:fill.zoneId?[fill.zoneId]:[];
+      if(!copperAssociationValid(regionIds.length?regionIds:null))fail('Invalid copper fill zone associations.');
+      if(regionIds.some(id=>!ids.has(id))){if(fill.imported===true)return null;fail('Copper fill references an unknown zone.');}
+      return regionIds.length>1?regionIds:regionIds[0]||null;
+    };
+    const metadata={zones:zones.map(zone=>({...zone,net:netNames.get(zone.net),layer:layerNames.get(zone.layer)})),fillZones:fills.map(association)};
+    const text=JSON.stringify(metadata);if(text.length>2*1024*1024)fail('Copper fills metadata exceeds 2 MiB.');
+    return '; '+copperPrefix+' '+text+'\n';
+  }
+  function boardMetadataWrite(board,nets=board.nets){return routingRulesWrite(nets)+copperMetadataWrite(board);}
   function astRead(text) {
     if (typeof text !== 'string' || !text.trim()) fail('The file is empty.');
     if (text.length > 64 * 1024 * 1024) fail('The file exceeds 64 MiB.');
@@ -144,15 +214,15 @@ function createRamenDSN() {
     }
     return yes;
   }
-  function parse(text, filename = 'board.dsn') {
+  function parse(text, filename = 'board.dsn', options = {}) {
     const ast = astRead(text);
-    const routingRules = routingRulesRead(text);
+    const routingRules = routingRulesRead(text), copperMetadata=copperMetadataRead(text);
     allowed(ast, ['parser','resolution','unit','structure','placement','library','network','wiring'], 'the design');
     const parser = first(ast, 'parser'), quote = first(parser, 'string_quote');
     if (quote && quote[1] !== '"') fail('Only the standard double-quote delimiter is supported.');
     const structure = first(ast, 'structure'), library = first(ast, 'library'), network = first(ast, 'network');
     if (!structure || !library || !network) fail('The structure, library, and network sections are required.');
-    allowed(structure, ['layer','boundary','via','rule','layer_rule','control','grid','keepout','via_keepout','place_keepout','snap_angle'], 'structure');
+    allowed(structure, ['layer','boundary','via','rule','layer_rule','control','grid','keepout','via_keepout','place_keepout','snap_angle','plane'], 'structure');
     allowed(library, ['image','padstack'], 'library');
     allowed(network, ['net','class','via','via_rule'], 'network');
     const snapAngle=first(structure,'snap_angle');
@@ -166,7 +236,7 @@ function createRamenDSN() {
       name: ast[1] && ast[1] !== "''" ? ast[1] : filename, filename, originalText: text,
       units: { name: unitName, resolution: res ? positive(res[2], 'resolution') : 1000, mmPerUnit: scales[unitName] },
       layers: [], nets: [], pads: [], viaDefs: [], vias: [], traces: [], outlines: [], holes: [], keepouts: [],
-      viaAtSmd: false, warnings: [], grids: {}, _ast: ast
+      viaAtSmd: false, warnings: [], grids: {}, _ast: ast, copperZones: [], copperFills: []
     };
     for (const layer of children(structure, 'layer')) {
       allowed(layer, ['type','property'], 'layer ' + layer[1]);
@@ -449,11 +519,42 @@ function createRamenDSN() {
       }
     }
     for (const net of board.nets) for (const pin of net.pins) if (!pinIds.has(pin)) fail('Net ' + net.name + ' references missing pin ' + pin + '.');
+    if(copperMetadata)board.copperZones=copperZonesValidate(board,copperMetadata.zones,true);
+    const zoneById=new Map(board.copperZones.map(zone=>[zone.id,zone])), copperWireFills=[];
+    function copperRegionRead(node,plane=false){
+      if(atoms(node).length!==(plane?2:1)||(!plane&&['net','type','clearance_class'].some(key=>children(node,key).length>1)))fail('Malformed copper region scope.');
+      const geometries=children(node).filter(child=>['polygon','rect'].includes(tag(child)));
+      if(geometries.length!==1)fail('A copper region needs exactly one polygon or rectangle.');
+      const geometry=geometries[0];
+      if(tag(geometry)==='polygon'&&n(geometry[2],'copper polygon width')!==0)fail('Copper polygons must have zero stroke width.');
+      const shape=shapeRead(geometry);if(shape.length!==1||shape[0].type!=='polygon')fail('A copper region needs one copper layer.');
+      const netNode=plane?['net',atoms(node)[1]]:first(node,'net');
+      if(!netNode||!netByName.has(netNode[1])||(netNode[2]&&netNode[2]!=='1'))fail('A copper region needs a known net without subnets.');
+      const state=plane?'protect':String(first(node,'type')?.[1]||'route');
+      if(!['normal','route','fix','protect'].includes(state))fail('Unknown copper fixed state '+state+'.');
+      const holes=[];
+      for(const window of children(node,'window')){
+        const nodes=children(window);if(atoms(window).length!==1||nodes.length!==1||!['polygon','rect'].includes(tag(nodes[0])))fail('A copper window needs one polygon or rectangle.');
+        if(tag(nodes[0])==='polygon'&&n(nodes[0][2],'copper window width')!==0)fail('Copper windows must have zero stroke width.');
+        const hole=shapeRead(nodes[0]);if(hole.length!==1||hole[0].type!=='polygon'||hole[0].layer!==shape[0].layer)fail('A copper window must use its region layer.');
+        holes.push(hole[0].points);
+      }
+      const fill={zoneId:null,net:netByName.get(netNode[1]).id,layer:shape[0].layer,points:shape[0].points,holes,fixed:true,imported:true,_dsnType:state};
+      if(plane)fill._dsnPlane=true;else fill._dsnWire=clone(node);
+      board.copperFills.push(fill);if(!plane)copperWireFills.push(fill);
+    }
+    for(const plane of children(structure,'plane')){allowed(plane,['polygon','rect','window'],'copper plane');copperRegionRead(plane,true);}
     const wiring = first(ast,'wiring');
     if (wiring) {
       allowed(wiring,['wire','via'],'wiring');
       for (const wire of children(wiring,'wire')) {
-        allowed(wire,['path','net','type','clearance_class'],'wire');
+        allowed(wire,['path','polygon','rect','window','net','type','clearance_class'],'wire');
+        if(first(wire,'polygon')||first(wire,'rect')){
+          if(first(wire,'path'))fail('A wire cannot contain both a path and a copper polygon.');
+          if(first(wire,'clearance_class')&&first(wire,'clearance_class')[1]!=='default')fail('Per-wire clearance classes are not supported.');
+          copperRegionRead(wire);continue;
+        }
+        if(children(wire,'window').length)fail('A path wire cannot contain copper windows.');
         const p = first(wire,'path'), netNode = first(wire,'net');
         if (!p || !netNode || !netByName.has(netNode[1])) fail('A wire needs a supported path and a known net.');
         if(children(p).length)fail('Nested wire-path constraints are not supported.');
@@ -474,6 +575,14 @@ function createRamenDSN() {
         if (!['normal','route','fix','protect'].includes(state)) fail('Unknown via fixed state ' + state + '.');
         board.vias.push({ x:n(v[2]),y:n(v[3]),padstack:def.name,net:netByName.get(netNode[1]).id,diameter:def.diameter,layers:everyLayer.filter(l=>l>=def.fromLayer&&l<=def.toLayer),fixed:['fix','protect'].includes(state) });
       }
+    }
+    if(copperMetadata){
+      if(copperMetadata.fillZones.length!==copperWireFills.length)fail('Copper fill associations do not match the actual wiring polygons.');
+      copperMetadata.fillZones.forEach((association,index)=>{
+        if(association===null)return;const regionIds=Array.isArray(association)?association:[association],fill=copperWireFills[index];
+        for(const id of regionIds){const zone=zoneById.get(id);if(!zone||zone.net!==fill.net||zone.layer!==fill.layer)fail('Copper fill association does not match its net and layer.');}
+        fill.zoneId=regionIds[0];if(regionIds.length>1)fill.zoneIds=regionIds.slice();fill.imported=options?.inputCopper===true;if(!fill.imported){delete fill._dsnWire;delete fill._dsnType;}
+      });
     }
     return board;
   }
@@ -502,12 +611,13 @@ function createRamenDSN() {
     // Work from the imported design rather than a routed board. In particular,
     // a previous run's via-in-pad override must not become a new input rule.
     const ast = clone(board._ast), index = ast.findIndex(x=>tag(x)==='wiring');
-    if (index < 0) ast.push(['wiring']);
+    const copperWiring=['wiring',...copperWiresWrite(board)];
+    if (index < 0) ast.push(copperWiring);
     else {
-      ast[index] = ['wiring'];
+      ast[index] = copperWiring;
       for (let i=ast.length-1;i>index;i--) if(tag(ast[i])==='wiring') ast.splice(i,1);
     }
-    return routingRulesWrite(board.nets)+astWrite(ast)+'\n';
+    return boardMetadataWrite(board)+astWrite(ast)+'\n';
   }
   function setNetRoutingRules(board, changes) {
     if (!board._ast) throw new Error('The original DSN syntax tree is required to change routing rules safely.');
@@ -541,13 +651,36 @@ function createRamenDSN() {
       const index = circuit.findIndex(child=>tag(child)==='use_layer');
       if (index < 0) circuit.push(layerRule); else circuit[index] = layerRule;
     }
-    return routingRulesWrite(nets)+astWrite(ast)+'\n';
+    if((board.copperZones||[]).length||(board.copperFills||[]).length){
+      const index=ast.findIndex(node=>tag(node)==='wiring'),wiring=routedWiringWrite(board);
+      if(index<0)ast.push(wiring);else ast[index]=wiring;
+    }
+    return boardMetadataWrite(board,nets)+astWrite(ast)+'\n';
   }
   function setNetRoutingLayers(board, changes) {return setNetRoutingRules(board,changes);}
-  function exportDsn(board, filename = board.filename || board.name || 'board.dsn') {
-    if (!board._ast) throw new Error('The original DSN syntax tree is required for lossless rule export.');
-    const ast = clone(board._ast), netNames = new Map(board.nets.map(net=>[net.id,net.name]));
-    ast[1] = filename;
+  function copperWiresWrite(board){
+    const netNames=new Map(board.nets.map(net=>[net.id,net.name])),out=[];
+    if(!Array.isArray(board.copperFills||[])||(board.copperFills||[]).length>100000)throw new Error('Cannot export an invalid copper fill list.');
+    for(const fill of board.copperFills||[]){
+      if(fill._dsnPlane)continue;
+      const net=netNames.get(fill.net),layer=board.layers[fill.layer]?.name;
+      if(!net||!layer||!Array.isArray(fill.points)||!Array.isArray(fill.holes||[]))throw new Error('Cannot export a copper fill with an invalid net, layer or shape.');
+      const geometry=pts=>{
+        if(pts.length<3||pts.length>10000||pts.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>!Number.isFinite(v))))throw new Error('Cannot export invalid copper polygon coordinates.');
+        return ['polygon',layer,'0',...pts.flatMap(p=>p.map(nativeNumber))];
+      };
+      if(fill.imported===true&&fill._dsnWire){
+        // Imported regions are immutable. Retain original rectangle/polygon
+        // syntax, precision and allowed per-region attributes without rewriting.
+        out.push(clone(fill._dsnWire));continue;
+      }
+      const wire=['wire',geometry(fill.points),['net',net],['type',fill.imported?fill._dsnType||'protect':'protect'],...(fill.holes||[]).map(hole=>['window',geometry(hole)])];
+      out.push(wire);
+    }
+    return out;
+  }
+  function routedWiringWrite(board){
+    const netNames=new Map(board.nets.map(net=>[net.id,net.name]));
     const wiring = ['wiring'];
     for (const trace of board.traces) {
       const name = netNames.get(trace.net), layer = board.layers[trace.layer]?.name;
@@ -559,6 +692,102 @@ function createRamenDSN() {
       if (!name || !def) throw new Error('Cannot export a via with an invalid net or padstack.');
       wiring.push(['via',via.padstack,nativeNumber(via.x),nativeNumber(via.y),['net',name],['type',via.fixed?'protect':'route']]);
     }
+    wiring.push(...copperWiresWrite(board));
+    return wiring;
+  }
+  function setCopperZones(board,zones){
+    if(!board._ast)throw new Error('The original DSN syntax tree is required to edit copper zones safely.');
+    // Retain fills when only a zone's name changes. Geometry/rule edits and
+    // deletion discard its old fill so it cannot become immutable copper.
+    const validated=copperZonesValidate(board,zones),previous=copperZonesValidate(board,board.copperZones||[]);
+    const signature=list=>JSON.stringify(list.map(zone=>({...zone,name:''})).sort((a,b)=>a.id.localeCompare(b.id)));
+    const unchanged=signature(validated)===signature(previous);
+    const next={...board,copperZones:validated,copperFills:(board.copperFills||[]).filter(fill=>fill.imported===true||fill.zoneId===null||fill.zoneId===undefined||unchanged)};
+    return exportDsn(next,board.filename||board.name||'board.dsn');
+  }
+  function copperBoardReference(board){
+    const scale=board.units?.mmPerUnit;
+    if(!(scale>0)||!Number.isFinite(scale))throw new Error('Copper settings need known DSN units.');
+    const netNames=new Map(board.nets.map(net=>[net.id,net.name])),number=value=>Number((value*scale).toFixed(7)),point=p=>p.map(number);
+    // Association hashes cover the full geometry and net list; only a few
+    // readable anchors are kept in the sidecar rather than the whole board.
+    const fingerprint=value=>{
+      const text=JSON.stringify(value);let a=2166136261,b=2654435769;
+      for(let i=0;i<text.length;i++){a=Math.imul(a^text.charCodeAt(i),16777619)>>>0;b=Math.imul(b^text.charCodeAt(i),2246822519)>>>0;}
+      return a.toString(16).padStart(8,'0')+b.toString(16).padStart(8,'0');
+    };
+    const anchors=board.pads.map(pad=>({id:pad.id,component:pad.component,pin:pad.pin,netName:netNames.get(pad.net)||null,xMm:pad.x*scale,yMm:pad.y*scale})).sort((a,b)=>a.id.localeCompare(b.id));
+    const shape=value=>value.type==='circle'?{layer:board.layers[value.layer]?.name,type:'circle',cx:number(value.cx),cy:number(value.cy),r:number(value.r)}:{layer:board.layers[value.layer]?.name,type:'polygon',points:value.points.map(point)};
+    const pads=board.pads.map(pad=>({id:pad.id,component:pad.component,pin:pad.pin,netName:netNames.get(pad.net)||null,x:number(pad.x),y:number(pad.y),shapes:pad.shapes.map(shape).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))})).sort((a,b)=>a.id.localeCompare(b.id));
+    const selected=anchors.length<=6?anchors:[...new Set(Array.from({length:6},(_,index)=>Math.round(index*(anchors.length-1)/5)))].map(index=>anchors[index]);
+    return {layers:board.layers.map(layer=>layer.name),
+      boundsMm:Object.fromEntries(Object.entries(board.bounds||{}).map(([key,value])=>[key,value*scale])),
+      outlineFingerprint:fingerprint([(board.outlines||[]).map(poly=>poly.map(point)),(board.holes||[]).map(poly=>poly.map(point))]),
+      netFingerprint:fingerprint(board.nets.map(net=>({name:net.name,pins:net.pins.slice().sort()})).sort((a,b)=>a.name.localeCompare(b.name))),
+      padFingerprint:fingerprint(pads),padAnchors:selected};
+  }
+  function exportCopperData(board){
+    // Separate, reusable configuration: no poured polygons are transferred to
+    // the CAD editor. Millimetres preserve physical dimensions across DSN units.
+    const zones=copperZonesValidate(board,board.copperZones||[]),scale=board.units?.mmPerUnit;
+    if(!(scale>0)||!Number.isFinite(scale))throw new Error('Copper settings need known DSN units.');
+    const nets=new Map(board.nets.map(net=>[net.id,net.name])),layers=new Map(board.layers.map(layer=>[layer.index,layer.name])),point=p=>p.map(value=>value*scale);
+    const named=zones.map(zone=>{
+      const result={...zone,net:nets.get(zone.net),layer:layers.get(zone.layer),points:zone.points.map(point),cutouts:zone.cutouts.map(poly=>poly.map(point))};
+      for(const field of copperDimensions)result[field]*=scale;
+      return result;
+    });
+    const text=JSON.stringify({format:'RamenRouter copper fill settings',version:1,
+      coordinates:{unit:'mm',origin:'DSN absolute coordinates',axes:'DSN original axes',sourceUnits:{...board.units}},
+      board:copperBoardReference(board),zones:named,
+      exportScope:{containsActualFilledPolygons:false,containsEditableZoneSettings:true,containsTracksAndVias:false,cadImportVerified:false},
+      usage:'Load this settings file into RamenRouter with the matching board. Its regions are temporary routing aids. Routed DSN and SES exports contain tracks, vias and any original DSN copper, while newly generated fills remain separate. Keep or recreate matching copper pours in your PCB editor and rebuild them after importing routing. This file is not an EasyEDA import format. Coordinates use the original DSN origin and axes without translation or mirroring.'},null,2)+'\n';
+    if(text.length>2*1024*1024)throw new Error('Copper settings exceed 2 MiB.');
+    return text;
+  }
+  function parseCopperSettings(board,input){
+    let metadata;
+    try{
+      if(typeof input==='string'){if(input.length>2*1024*1024)throw new Error('size');metadata=JSON.parse(input);}
+      else {const text=JSON.stringify(input);if(!text||text.length>2*1024*1024)throw new Error('size');metadata=JSON.parse(text);}
+    }catch(_){throw new Error('Copper settings: choose a valid JSON settings file no larger than 2 MiB.');}
+    const bad=message=>{throw new Error('Copper settings: '+message);};
+    if(!metadata||metadata.format!=='RamenRouter copper fill settings'||metadata.version!==1)bad('Unsupported settings format or version.');
+    const coordinates=metadata.coordinates,source=coordinates?.sourceUnits,scale=board.units?.mmPerUnit;
+    if(coordinates?.unit!=='mm'||coordinates.origin!=='DSN absolute coordinates'||coordinates.axes!=='DSN original axes')bad('The settings need millimetres with the original DSN origin and axes.');
+    if(!source||!Object.prototype.hasOwnProperty.call(copperUnitScales,source.name)||!Number.isFinite(source.resolution)||source.resolution<=0||!Number.isFinite(source.mmPerUnit)||Math.abs(source.mmPerUnit-copperUnitScales[source.name])>1e-12)bad('The declared source units are invalid.');
+    if(!(scale>0)||!Number.isFinite(scale))bad('The current board has unknown DSN units.');
+    function equal(a,b){
+      if(typeof b==='number')return typeof a==='number'&&Number.isFinite(a)&&Math.abs(a-b)<=1e-7;
+      if(Array.isArray(b))return Array.isArray(a)&&a.length===b.length&&b.every((value,index)=>equal(a[index],value));
+      if(b&&typeof b==='object')return a&&typeof a==='object'&&!Array.isArray(a)&&Object.keys(a).length===Object.keys(b).length&&Object.keys(b).every(key=>Object.prototype.hasOwnProperty.call(a,key)&&equal(a[key],b[key]));
+      return a===b;
+    }
+    if(!equal(metadata.board,copperBoardReference(board)))bad('This file belongs to a different board, layer set, net list, pad geometry or pad placement. Load its matching DSN.');
+    if(!Array.isArray(metadata.zones)||metadata.zones.length>64)bad('Use at most 64 copper regions.');
+    const point=p=>{
+      if(!Array.isArray(p)||p.length!==2||p.some(value=>typeof value!=='number'||!Number.isFinite(value)))bad('A region has invalid millimetre coordinates.');
+      return p.map(value=>value/scale);
+    };
+    const native=metadata.zones.map(zone=>{
+      if(!zone||typeof zone!=='object'||Array.isArray(zone)||!Array.isArray(zone.points)||!Array.isArray(zone.cutouts||[])||zone.points.length>2048||(zone.cutouts||[]).length>64)bad('A region has invalid geometry.');
+      const result={...zone,points:zone.points.map(point),cutouts:(zone.cutouts||[]).map(poly=>{if(!Array.isArray(poly)||poly.length>2048)bad('A cutout has invalid geometry.');return poly.map(point);})};
+      for(const field of copperDimensions)if(Object.prototype.hasOwnProperty.call(zone,field)){if(typeof zone[field]!=='number'||!Number.isFinite(zone[field]))bad('A region has an invalid '+field+'.');result[field]=zone[field]/scale;}
+      return result;
+    });
+    return copperZonesValidate(board,native,true);
+  }
+  function exportRoutedDsn(board,filename=board.filename||board.name||'board.dsn'){
+    // Only physical copper present in the imported DSN belongs in the CAD
+    // routing download. Editable temporary pours are saved in their sidecar.
+    const imported=(board.copperFills||[]).filter(fill=>fill.imported===true||fill.fixed===true&&!fill.zoneId);
+    return exportDsn({...board,copperZones:[],copperFills:imported},filename);
+  }
+  function exportDsn(board, filename = board.filename || board.name || 'board.dsn') {
+    if (!board._ast) throw new Error('The original DSN syntax tree is required for lossless rule export.');
+    const ast = clone(board._ast);
+    ast[1] = filename;
+    const wiring=routedWiringWrite(board);
     const index = ast.findIndex(x=>tag(x)==='wiring'); if(index<0) ast.push(wiring); else ast[index]=wiring;
     if (typeof board.viaInPadOverride==='boolean'||board.viaInPadApplied) {
       const enabled=typeof board.viaInPadOverride==='boolean'?board.viaInPadOverride:true,value=enabled?'on':'off';
@@ -575,7 +804,7 @@ function createRamenDSN() {
         else if(!enabled)for(const index of modifiers.reverse())if(info[index]==='attach')info.splice(index,1);
       }
     }
-    return routingRulesWrite(board.nets)+astWrite(ast)+'\n';
+    return boardMetadataWrite(board)+astWrite(ast)+'\n';
   }
   function sesPlan(board) {
     const limit=2147483647, originalResolution=positive(board.units.resolution,'SES resolution');
@@ -615,6 +844,10 @@ function createRamenDSN() {
       widthsExpanded:0,viaDefinitionsExpanded:0,
       note:'SES coordinates are quantized to the stated resolution. Copper widths and via diameters round outward by at most one resolution unit; this can consume a small amount of clearance. Original DSN rules are unchanged.'
     };
+    if((board.copperFills||[]).length||(board.copperZones||[]).length){
+      report.copperFillsIncluded=false;report.copperZonesIncluded=false;report.copperFillCount=(board.copperFills||[]).length;
+      report.copperWarning='SES exports tracks and vias only. Temporary copper fills are excluded from routed DSN and SES exports; save Copper settings separately. Keep or recreate matching copper pours in your PCB editor and rebuild them after importing routing. A connection that relies on a temporary fill is incomplete until the corresponding PCB-editor copper is rebuilt.';
+    }
     const checkPoint=p=>{report.maximumCoordinateErrorNative=Math.max(report.maximumCoordinateErrorNative,Math.hypot(Number(position(p[0]))/resolution-p[0],Number(position(p[1]))/resolution-p[1]));};
     for(const trace of board.traces){
       const delta=Number(dimension(trace.width))/resolution-trace.width;
@@ -654,10 +887,10 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.2.22']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.3.0']],library,network]];
     return astWrite(session)+'\n';
   }
-  return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers };
+  return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, setCopperZones, exportCopperData, parseCopperSettings, exportRoutedDsn };
 }
 if (typeof globalThis !== 'undefined') globalThis.createRamenDSN = createRamenDSN;
 if (typeof module !== 'undefined' && module.exports) module.exports = { createRamenDSN };

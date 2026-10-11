@@ -1,5 +1,5 @@
 /* RamenRouter checked path refinement. GPL-3.0-or-later. */
-function createRamenOptimizer(geometry, yieldTask) {
+function createRamenOptimizer(geometry, yieldTask, copper) {
   'use strict';
   const G=geometry,EPS=1e-8;
   const clone=x=>JSON.parse(JSON.stringify(x));
@@ -19,8 +19,11 @@ function createRamenOptimizer(geometry, yieldTask) {
     let candidateNet=null,pendingCandidates=0;
     const flush=()=>{if(pendingCandidates){measurement?.count('refinementCandidates',pendingCandidates,candidateNet);pendingCandidates=0;}};
     const pause=()=>{flush();return wait();};
-    const validate=board=>{const finish=measurement?.begin('checking');try{return G.validate(board);}finally{finish?.();}};
-    const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
+    const fillSignatures=new WeakMap(),fillCache=new Map();
+    const hasZones=board=>(board.copperZones||[]).length>0;
+    function refreshFills(board){if(!hasZones(board))return;if(!copper?.build)throw new Error('Copper-fill refinement support is not loaded.');const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;if(fillCache.has(signature)){board.copperFills=clone(fillCache.get(signature));fillCache.delete(signature);fillCache.set(signature,board.copperFills);}else{board.copperFills=copper.build(board,options);fillCache.set(signature,board.copperFills);while(fillCache.size>4)fillCache.delete(fillCache.keys().next().value);}fillSignatures.set(board,signature);}
+    const validate=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.validate(board);}finally{finish?.();}};
+    const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     let lastDetail=0;
     let lastWork=0,workKind=null;
@@ -51,7 +54,7 @@ function createRamenOptimizer(geometry, yieldTask) {
       detail('Refining paths · '+(ordinal+1)+'/'+board.traces.length+' · '+(nets.get(trace.net)?.name||'unnamed net'),{stage:'refinement-traces',processed:ordinal+1,total:board.traces.length,netId:trace.net,netName:nets.get(trace.net)?.name});
       spatial('Inspecting trace · '+(nets.get(trace.net)?.name||'unnamed net'),{stage:'refinement-trace',netId:trace.net,netName:nets.get(trace.net)?.name},()=>({kind:'trace',paths:[{layer:trace.layer,points:trace.points.slice(0,512).map(p=>p.slice(0,2))}],label:trace.points.length>512?'Current trace · first section':'Current trace for refinement'}));
       if(ordinal%6===0){await pause();if(isCancelled())break;}
-      if(trace.fixed||trace.points.length<3){processedTraces++;work('traces',processedTraces,totalTraces);continue;}
+      if(trace.fixed||index<(options.preserveTraceCount||0)||trace.points.length<3){processedTraces++;work('traces',processedTraces,totalTraces);continue;}
       const net=nets.get(trace.net),ownClear=net?.routingClearance??net?.clearance??0;
       const primitives=G.copper(board).primitives.filter(p=>p.layer===trace.layer&&p.net!==trace.net);
       const obstacleIndex=G.spatialIndex(primitives,Math.max((board.bounds.maxX-board.bounds.minX)/40,trace.width*4));
@@ -98,6 +101,20 @@ function createRamenOptimizer(geometry, yieldTask) {
     }
     flush();
     work('traces',processedTraces,totalTraces,true);
+    // A real plane can replace generated point-to-point trunks. Delete only
+    // after rebuilding the pour and checking the complete conductive graph.
+    let removedTraces=0;
+    if(hasZones(board)){
+      const planeNets=new Set((board.copperZones||[]).filter(zone=>zone.enabled!==false).map(zone=>zone.net));
+      for(let index=board.traces.length-1;index>=(options.preserveTraceCount||0)&&!isCancelled();index--){
+        const trace=board.traces[index];if(trace.fixed||trace.fanout||!planeNets.has(trace.net))continue;
+        if(index%8===0){await pause();if(isCancelled())break;}
+        board.traces.splice(index,1);
+        const next=connectivity(board).unrouted,checked=validate(board);
+        if(next<=unrouted&&checked.totalViolations<=base.totalViolations&&checked.belowNominalWidthTraceCount<=base.belowNominalWidthTraceCount){removedTraces++;unrouted=next;}
+        else board.traces.splice(index,0,trace);
+      }
+    }
     // Remove electrically redundant generated vias, checking the complete copper graph.
     // A local off-layer escape must still terminate in a real transition even
     // if another same-net path makes that via electrically redundant.
@@ -108,7 +125,7 @@ function createRamenOptimizer(geometry, yieldTask) {
     for(let index=board.vias.length-1;index>=0&&!isCancelled();index--){
       detail('Checking redundant vias · '+(totalVias-index)+'/'+totalVias+' · '+removed+' removed',{stage:'refinement-vias',processed:totalVias-index,total:totalVias,removed});
       if(index%8===0){await pause();if(isCancelled())break;}
-      if(board.vias[index].fixed||escapeVias.has(board.vias[index])){processedVias++;work('vias',processedVias,totalVias);continue;}
+      if(board.vias[index].fixed||index<(options.preserveViaCount||0)||escapeVias.has(board.vias[index])){processedVias++;work('vias',processedVias,totalVias);continue;}
       const via=board.vias[index];measurement?.count('redundantViaChecks',1,via.net);spatial('Testing redundant via · '+(nets.get(via.net)?.name||'unnamed net'),{stage:'refinement-via',netId:via.net,netName:nets.get(via.net)?.name},()=>({kind:'via',points:via.layers.slice(0,64).map(layer=>[via.x,via.y,layer]),label:'Current via · testing whether it is needed'}));board.vias.splice(index,1);
       const next=connectivity(board).unrouted;
       if(next<=unrouted){removed++;unrouted=next;}else board.vias.splice(index,0,via);
@@ -121,7 +138,7 @@ function createRamenOptimizer(geometry, yieldTask) {
       emit({type:'progress',phase:'optimizing',message:'Refinement rejected by final rule/connectivity check; original checked board retained.'});return input;
     }
     const savings=(originalLength-board.traces.reduce((s,t)=>s+length(t.points),0))*board.units.mmPerUnit;
-    emit({type:'progress',phase:'optimizing',message:'Refinement: '+changed+' paths shortened, '+removed+' redundant vias removed, '+savings.toFixed(4)+' mm saved.',board});
+    emit({type:'progress',phase:'optimizing',message:'Refinement: '+changed+' paths shortened, '+removed+' redundant vias removed'+(removedTraces?', '+removedTraces+' plane-redundant traces removed':'')+', '+savings.toFixed(4)+' mm saved.',board});
     return board;
     }finally{flush();finishRefinement?.();}
   }

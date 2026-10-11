@@ -2,7 +2,7 @@
 
 (() => {
   const $ = id => document.getElementById(id);
-  const activeStates = new Set(['inspecting', 'clearing', 'updating_rules', 'starting', 'running', 'routing', 'fanout', 'optimizing', 'stopping', 'loading', 'pausing', 'paused']);
+  const activeStates = new Set(['inspecting', 'clearing', 'updating_rules', 'updating_copper', 'starting', 'running', 'routing', 'fanout', 'optimizing', 'stopping', 'loading', 'pausing', 'paused']);
   const terminalStates = new Set(['completed', 'stopped', 'timed_out', 'error', 'failed']);
   const palette = ['#df9676', '#73c7c2', '#c1ab69', '#a394d3', '#83b76e', '#be86a6', '#73a0d0', '#a5b4bf'];
   const nativeEngine = globalThis.RamenNative;
@@ -30,6 +30,8 @@
   let announcedBudgetKey = null;
   let announcedExportJobId = null;
   let downloadedSesJobId = null;
+  let downloadedDsnJobId = null;
+  let downloadedCopperJobId = null;
   let remainingRenderKey = '';
   let clearRoutingJobId = null;
   let netLayersData = null;
@@ -40,6 +42,15 @@
   let previousRulesDialogKey = null;
   let previousRulesAction = null;
   let previousRulesError = '';
+  let copperData = null;
+  let copperDrafts = [];
+  let selectedCopperId = null;
+  let copperDrawing = null;
+  let copperApplying = false;
+  let focusedCopperId = null;
+  let pendingCopperExport = null;
+  let copperLoadPromptJobId = null;
+  let hasSavedCopperSettings = false;
   let dismissedDirectionJobId = null;
   const acknowledgedAttention = new Set();
   let activeAttentionKey = null;
@@ -65,7 +76,7 @@
   let drawQueued = false;
 
   const icons = { ready: '○', completed: '✓', stopped: 'Ⅱ', paused: 'Ⅱ', pausing: '◷', timed_out: '◷', error: '!', failed: '!' };
-  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing routing', updating_rules: 'Updating routing rules', starting: 'Starting engine', running: 'Routing in progress', routing: 'Routing in progress', fanout: 'Fanout in progress', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Job complete', stopped: 'Job stopped', timed_out: 'Time limit reached', error: 'Job needs attention', failed: 'Job needs attention', idle: 'Ready when you are' };
+  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing routing', updating_rules: 'Updating routing rules', updating_copper: 'Building copper fills', starting: 'Starting engine', running: 'Routing in progress', routing: 'Routing in progress', fanout: 'Fanout in progress', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Job complete', stopped: 'Job stopped', timed_out: 'Time limit reached', error: 'Job needs attention', failed: 'Job needs attention', idle: 'Ready when you are' };
 
   function toast(message, error = false) {
     clearTimeout(toastTimer);
@@ -108,7 +119,7 @@
     return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
   }
 
-  function phaseName(phase) { return ({ reading: 'Reading board data', checking: 'Checking routing rules', advising: 'Preparing placement advice', exporting: 'Preparing exports', rasterizing: 'Preparing copper and clearance grid', loading: 'Loading board', routing: 'Routing connections', fanout: 'Preparing pad escapes', optimizing: 'Refining routes', deep_search: 'Smart search', pad_escape: 'Pad-via escape', finishing: 'Finishing remaining connections', updating_rules: 'Updating routing rules' })[phase] || phase; }
+  function phaseName(phase) { return ({ reading: 'Reading board data', checking: 'Checking routing rules', advising: 'Preparing placement advice', exporting: 'Preparing exports', rasterizing: 'Preparing copper and clearance grid', loading: 'Loading board', routing: 'Routing connections', fanout: 'Preparing pad escapes', optimizing: 'Refining routes', deep_search: 'Smart search', pad_escape: 'Pad-via escape', finishing: 'Finishing remaining connections', updating_rules: 'Updating routing rules', copper_fill: 'Building and checking copper fills' })[phase] || phase; }
 
   function isActive() { return Boolean(currentState?.job && activeStates.has(currentState.job.state)); }
   function awaitingMoreTime(job = currentState?.job) { return job?.operation === 'run' && ['pausing', 'paused'].includes(job.state); }
@@ -171,7 +182,7 @@
   function updateControls() {
     const job = currentState?.job;
     const active = isActive();
-    const available = connected && !busy;
+    const available = connected && !busy && !copperDrawing;
     const previousRulesPending = hasPreviousRulesDecision();
     const stopping = job?.state === 'stopping';
     $('runButton').hidden = active;
@@ -190,6 +201,7 @@
     if ($('clearRoutingDialog').open && (job?.id !== clearRoutingJobId || active)) $('clearRoutingDialog').close();
     $('netLayersSetting').hidden = !job || job.state === 'idle';
     $('netLayersButton').disabled = !available || active || previousRulesPending;
+    updateCopperControls(available, active, previousRulesPending);
     $('cancelNetLayers').disabled = busy;
     $('closeNetLayers').disabled = busy;
     if ($('netLayersDialog').open && (job?.id !== netLayersData?.jobId || active)) { discardRoutingRuleDraft(); $('netLayersDialog').close(); }
@@ -221,8 +233,11 @@
     $('copyLog').disabled = !lastLogs;
     $('runLabel').textContent = $('fanout').checked && $('fanoutOnly').checked ? 'Run SMD escape' : (job && terminalStates.has(job.state) ? 'Route again' : 'Start routing');
     let hint = !job ? 'Load a board to begin.' : (active ? 'Routing in a local browser worker.' : (job.routingCleared ? 'Runs from the cleared input board.' : 'Runs from the original input board.'));
+    if (!active && job?.copperSummary?.zoneCount) hint = 'Routes from your loaded board with its copper areas.';
     if (job?.state === 'clearing') hint = 'Removing routes and checking your board…';
     if (job?.state === 'updating_rules') hint = 'Applying net layers and checking your input board…';
+    if (job?.state === 'updating_copper') hint = 'Building copper fills and checking their connections…';
+    if (copperDrawing) hint = 'Draw your copper shape, then choose Finish shape.';
     if (busy) hint = 'Preparing your board…';
     if (previousRulesPending) hint = 'Choose whether to reuse your previous routing rules before starting.';
     if (stopping) hint = forcedStop ? 'Force stop requested.' : 'Finishing the current operation…';
@@ -403,13 +418,17 @@
     const clean = job?.state === 'completed' && !job.settings?.fanoutOnly && outputAvailable('ses') &&
       stats?.unrouted === 0 && (stats.totalViolations ?? stats.clearanceViolations) === 0 &&
       stats.belowNominalWidthTraceCount === 0 && stats.drcChecked && stats.widthRulesChecked;
+    const withCopper = Boolean(job?.copperSummary?.zoneCount);
     const show = Boolean(clean && downloadedSesJobId !== job.id && !busy);
     $('downloadSes').classList.toggle('export-ready', show);
+    $('downloadDsn').classList.remove('export-ready');
+    $('downloadCopper').classList.toggle('export-ready', show && withCopper && downloadedCopperJobId !== job.id);
+    $('exportReadyMessage').textContent = withCopper ? 'Routes are ready. Use matching copper pours in your PCB editor, and save the separate copper settings if you want to reuse them here.' : 'All connections routed. Your routing session is ready to export.';
     $('exportReadyMessage').hidden = !show;
     if (show && announcedExportJobId !== job.id) {
       clearTimeout(toastTimer); $('toast').hidden = true;
       announcedExportJobId = job.id;
-      requestAnimationFrame(() => { if ($('downloadSes').classList.contains('export-ready')) $('downloadSes').scrollIntoView({ block: 'nearest' }); });
+      requestAnimationFrame(() => { const target = $('downloadSes'); if (target.classList.contains('export-ready')) target.scrollIntoView({ block: 'nearest' }); });
     }
   }
 
@@ -709,6 +728,10 @@
         writeRoutingOptions(pending.previous); pendingRoutingOptions = null;
       }
     }
+    if (previousJob?.state === 'updating_copper' && job?.state !== 'updating_copper') {
+      if (job?.copperError) toast(`Copper changes could not be applied. ${job.copperError}`, true);
+      else if (job?.copperSummary) toast('Copper rebuilt. Review the areas and remaining connections before routing.');
+    }
     if (previousJob?.state === 'clearing' && job?.state !== 'clearing') {
       if (job?.id === previousJob.id && job.state === 'ready' && job.routingCleared) {
         $('showAirwires').checked = true;
@@ -738,7 +761,7 @@
     if (hasJob) {
       $('fileName').textContent = job.name || 'Untitled board';
       $('fileName').title = job.name || 'Untitled board';
-      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading design…' : (job.state === 'clearing' ? 'Clearing routing…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.routingCleared ? 'Cleared input DSN' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'Input DSN · edited routing rules' : 'Original DSN loaded'))));
+      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading design…' : (job.state === 'clearing' ? 'Clearing routing…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.state === 'updating_copper' ? 'Building copper fills…' : (job.routingCleared ? 'Cleared input DSN' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'Input DSN · edited routing rules' : (job.copperSummary?.zoneCount ? 'DSN · copper areas added' : 'Original DSN loaded'))))));
       document.title = `${job.name || 'Board'} · RamenRouter`;
     }
     const completedWithRuleIssues = job?.state === 'completed' && (job.stats?.totalViolations ?? job.stats?.clearanceViolations ?? 0) > 0;
@@ -763,9 +786,11 @@
     }
     if (hasJob && job.id !== lastJobId) {
       if (focusedAdvice) clearAdviceFocus();
+      if (copperData || copperDrawing || $('copperDialog').open) discardCopperDraft();
+      copperData = null; focusedCopperId = null;
       lastJobId = job.id;
       acknowledgedAttention.clear();
-      dismissedStopJobId = viewedStopJobId = announcedStopJobId = announcedExportJobId = downloadedSesJobId = null;
+      dismissedStopJobId = viewedStopJobId = announcedStopJobId = announcedExportJobId = downloadedSesJobId = downloadedDsnJobId = downloadedCopperJobId = null;
       remainingRenderKey = '';
       boardKey = '';
       board = null;
@@ -809,6 +834,7 @@
       $('canvasLabel').hidden = false;
       const parts = [`${board.layers.length} layers`, `${(board.traces || []).length.toLocaleString()} trace segments`];
       const bounds = getBounds();
+      if (board.copperFills?.length) parts.push(`${number(board.copperFills.length)} copper regions`);
       if (bounds) parts.push(`${number(bounds[2] - bounds[0], 1)} × ${number(bounds[3] - bounds[1], 1)} mm`);
       $('geometrySummary').textContent = parts.join(' · ');
       if (fit) fitBoard(); else draw();
@@ -1298,6 +1324,7 @@
       const points = Array.isArray(outline) ? outline : outline.points;
       if (path(points, true)) { ctx.fillStyle = '#14252399'; ctx.fill(); ctx.strokeStyle = '#4e7567'; ctx.lineWidth = 1.4; ctx.stroke(); }
     }
+    for (const layer of [...(board.layers || [])].reverse()) if (layerVisible(layer.id)) paintCopperLayer(layer.id);
     for (const layer of [...(board.layers || [])].reverse()) {
       if (!layerVisible(layer.id)) continue;
       ctx.strokeStyle = layerColor(layer.id); ctx.globalAlpha = .87;
@@ -1328,6 +1355,8 @@
       }
       ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
+    paintCopperBoundaries();
+    paintCopperDrawing();
     if (focusedAdvice && focusedAdvice.jobId === currentState?.job?.id) {
       const [minX, minY, maxX, maxY] = focusedAdvice.bounds;
       const [left, top] = worldToScreen(minX, maxY), [right, bottom] = worldToScreen(maxX, minY);
@@ -1361,6 +1390,358 @@
     }
   }
 
+  function selectedCopperZone() { return copperDrafts.find(zone => zone.id === selectedCopperId) || null; }
+
+  function updateCopperControls(available, active, previousRulesPending) {
+    const job = currentState?.job;
+    const hasBoard = Boolean(job && job.state !== 'idle');
+    $('copperSetting').hidden = !hasBoard;
+    $('copperButton').disabled = !available || active || previousRulesPending || !board;
+    const summary = job?.copperSummary;
+    const count = summary?.zoneCount ?? board?.copperZones?.length ?? 0;
+    const copperNets = summary?.netNames?.slice(0, 3).join(', ');
+    $('copperSummary').textContent = count ? `${number(count)} temporary copper ${count === 1 ? 'area' : 'areas'}${copperNets ? ' · ' + copperNets : ''}` : 'Create a copper area connected to a net.';
+    $('copperExportNote').hidden = !count;
+    $('downloadCopper').hidden = !count;
+    $('downloadCopper').disabled = !connected || active || busy || !count;
+    updateCopperChoiceDialogs();
+    for (const control of $('copperDialog').querySelectorAll('button,input,select')) control.disabled = busy || copperApplying;
+    if (!busy && !copperApplying && selectedCopperZone()) updateCopperDependentFields(selectedCopperZone());
+    if ($('copperDialog').open && ((copperData?.jobId && job?.id !== copperData.jobId) || active) && !copperApplying) discardCopperDraft();
+    if (copperDrawing && ((copperData?.jobId && job?.id !== copperData.jobId) || active)) discardCopperDraft();
+  }
+
+  function rememberSavedCopperSettings() {
+    hasSavedCopperSettings = true;
+    try { localStorage.setItem('ramenrouter.copper.settings.saved.v1', 'yes'); } catch {}
+  }
+
+  function updateCopperChoiceDialogs() {
+    const job = currentState?.job;
+    if (pendingCopperExport && (job?.id !== pendingCopperExport.jobId || isActive())) { pendingCopperExport = null; if ($('copperExportDialog').open) $('copperExportDialog').close(); }
+    for (const control of $('copperExportDialog').querySelectorAll('button')) control.disabled = busy;
+    if (copperLoadPromptJobId && job?.id !== copperLoadPromptJobId) { copperLoadPromptJobId = null; if ($('copperLoadDialog').open) $('copperLoadDialog').close(); }
+    if (!copperLoadPromptJobId || job?.state !== 'ready' || busy || !connected || !board || boardKey !== currentBoardKey() || hasPreviousRulesDecision() || document.querySelector('dialog[open]')) return;
+    if (job.copperSummary?.zoneCount) { copperLoadPromptJobId = null; return; }
+    $('copperLoadDialog').showModal();
+  }
+
+  async function completeCopperExport(saveSettings) {
+    const pending = pendingCopperExport;
+    if (!pending || pending.jobId !== currentState?.job?.id || busy || isActive()) return;
+    busy = true; updateControls();
+    try {
+      if (saveSettings && !await download('copper', true)) return;
+      if (pending.jobId !== currentState?.job?.id) throw new Error('The board changed. Choose an export from the current board.');
+      if (!await download(pending.type, true)) return;
+      pendingCopperExport = null; $('copperExportDialog').close();
+      toast(saveSettings ? 'Copper settings and routing exported. Refill your matching copper pours and check connectivity in your PCB editor.' : 'Routing exported. Use your matching copper pours and check connectivity in your PCB editor.');
+    } catch (error) { toast(error.message, true); }
+    finally { busy = false; updateControls(); }
+  }
+
+  async function importCopperSettings(file) {
+    if (!file || busy || isActive() || !connected || !currentState?.job || copperDrawing) return;
+    const jobId = currentState.job.id;
+    busy = true; copperLoadPromptJobId = null; updateControls();
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error('Choose a copper settings file smaller than 2 MiB.');
+      let settings;
+      try { settings = JSON.parse(await file.text()); } catch { throw new Error('Choose a valid RamenRouter copper settings JSON file.'); }
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Choose a RamenRouter copper settings file saved from this board.');
+      if (jobId !== currentState?.job?.id) throw new Error('The board changed. Choose a settings file for the current board.');
+      await post('/api/copper-zones/import', { jobId, settings });
+      if ($('copperDialog').open) $('copperDialog').close();
+      if ($('copperLoadDialog').open) $('copperLoadDialog').close();
+      toast('Copper settings loaded. Rebuilding the temporary areas and checking their connections…');
+    } catch (error) { if ($('copperDialog').open) copperError(error.message); else toast(error.message, true); }
+    finally { busy = false; $('copperSettingsFileInput').value = ''; updateControls(); }
+  }
+
+  function copperError(message = '') {
+    $('copperError').textContent = message;
+    $('copperError').hidden = !message;
+  }
+
+  async function openCopper() {
+    if (!connected || busy || isActive() || !board || hasPreviousRulesDecision()) return;
+    const jobId = currentState.job.id;
+    if (copperData?.jobId === jobId) { renderCopperDraft(); $('copperDialog').showModal(); return; }
+    busy = true; updateControls();
+    try {
+      const data = await api('/api/copper-zones');
+      if (currentState?.job?.id !== jobId || isActive()) return;
+      if (!data || !Array.isArray(data.layers) || !Array.isArray(data.nets) || !Array.isArray(data.zones)) throw new Error('Copper settings are not available for this board yet.');
+      copperData = { ...data, jobId: data.jobId || jobId };
+      copperDrafts = structuredClone(data.zones);
+      selectedCopperId = copperDrafts[0]?.id ?? null;
+      copperError();
+      $('copperLayer').replaceChildren();
+      for (const layer of displayLayers(data.layers)) { const option = document.createElement('option'); option.value = String(layer.id); option.textContent = layer.displayName || layer.name; $('copperLayer').append(option); }
+      $('copperNet').replaceChildren();
+      for (const net of data.nets) { const option = document.createElement('option'); option.value = String(net.id); option.textContent = net.name; $('copperNet').append(option); }
+      renderCopperDraft();
+      $('copperDialog').showModal();
+    } catch (error) { toast(error.message, true); }
+    finally { busy = false; updateControls(); }
+  }
+
+  function openCopperRing(points) {
+    if (!Array.isArray(points)) return points;
+    const ring = points.filter((point, index) => index === 0 || point[0] !== points[index - 1][0] || point[1] !== points[index - 1][1]);
+    if (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
+    return ring;
+  }
+
+  function boardCopperBoundary() {
+    const candidates = (board?.outlines || []).map(outline => Array.isArray(outline) ? outline : outline.points).filter(points => Array.isArray(points) && points.length >= 3);
+    // A single outline preserves concave edges. The engine clips a whole-board
+    // rectangle against the actual board when several outlines are present.
+    if (candidates.length === 1) return openCopperRing(candidates[0].map(point => [Number(point[0]), Number(point[1])]));
+    const bounds = getBounds();
+    if (!bounds) throw new Error('A board outline is needed before adding a whole-board copper fill.');
+    return [[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[2], bounds[3]], [bounds[0], bounds[3]]];
+  }
+
+  function newCopperZone(points = []) {
+    const net = copperData.nets.find(item => /^(GND|GROUND)$/i.test(item.name)) || copperData.nets[0];
+    const layer = copperData.layers[0];
+    if (!net || !layer) throw new Error('This board needs a net and a copper layer before adding a fill.');
+    const clearance = Number.isFinite(net.clearance) ? net.clearance : .2;
+    const width = Number.isFinite(net.width) && net.width > 0 ? net.width : .25;
+    const id = `zone-${globalThis.crypto?.randomUUID?.() || Date.now() + '-' + Math.random().toString(16).slice(2)}`;
+    return { id, name: `${net.name} copper ${copperDrafts.length + 1}`, net: net.id, layer: layer.id, points, cutouts: [], style: 'solid', keepIslands: false, padConnection: 'spoke', clearance, edgeClearance: clearance, thermalGap: Math.max(clearance, .000001), spokeWidth: width, gridPitch: Math.max(width * 4, clearance * 4, .000004), gridWidth: width, enabled: true };
+  }
+
+  function addCopperArea(drawn) {
+    if (!copperData || busy || isActive()) return;
+    if (copperDrafts.length >= 64) { copperError('This board already has the maximum of 64 copper areas. Edit or delete an existing area.'); return; }
+    try {
+      const zone = newCopperZone(drawn ? [] : boardCopperBoundary());
+      copperDrafts.push(zone); selectedCopperId = zone.id; copperError(); renderCopperDraft();
+      if (drawn) startCopperDrawing('boundary', null, true);
+    } catch (error) { copperError(error.message); }
+  }
+
+  const copperNumberFields = { clearance: 'copperClearance', edgeClearance: 'copperEdgeClearance', thermalGap: 'copperThermalGap', spokeWidth: 'copperSpokeWidth', gridPitch: 'copperGridPitch', gridWidth: 'copperGridWidth' };
+
+  function readCopperEditor() {
+    const zone = selectedCopperZone();
+    if (!zone) return;
+    zone.name = $('copperName').value.trim().slice(0, 100);
+    zone.layer = copperData.layers.find(layer => String(layer.id) === $('copperLayer').value)?.id ?? zone.layer;
+    zone.net = copperData.nets.find(net => String(net.id) === $('copperNet').value)?.id ?? zone.net;
+    zone.style = $('copperStyle').value;
+    zone.padConnection = $('copperPadConnection').value;
+    zone.enabled = $('copperEnabled').checked;
+    zone.keepIslands = $('copperKeepIslands').checked;
+    for (const [field, id] of Object.entries(copperNumberFields)) zone[field] = $(id).value.trim() === '' ? NaN : Number($(id).value);
+    updateCopperDependentFields(zone); renderCopperList();
+  }
+
+  function updateCopperDependentFields(zone) {
+    for (const item of document.querySelectorAll('.copper-thermal-field')) { item.hidden = zone.padConnection !== 'spoke'; item.querySelector('input').disabled = item.hidden; }
+    for (const item of document.querySelectorAll('.copper-grid-field')) { item.hidden = zone.style === 'solid'; item.querySelector('input').disabled = item.hidden; }
+  }
+
+  function renderCopperList() {
+    const list = $('copperZoneList'); list.replaceChildren();
+    $('copperZoneCount').textContent = number(copperDrafts.length);
+    for (const zone of copperDrafts) {
+      const item = document.createElement('div'); item.setAttribute('role', 'listitem');
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'copper-zone-row'; button.setAttribute('aria-pressed', String(zone.id === selectedCopperId)); button.dataset.zoneId = zone.id;
+      const title = document.createElement('strong'); title.textContent = zone.name || 'Unnamed copper area';
+      const detail = document.createElement('span');
+      const net = copperData.nets.find(net => net.id === zone.net);
+      const layer = displayLayers(copperData.layers).find(layer => layer.id === zone.layer);
+      detail.textContent = `${net?.name || zone.net} · ${layer?.displayName || layer?.name || zone.layer}${zone.enabled === false ? ' · disabled' : ''}`;
+      button.append(title, detail);
+      button.addEventListener('click', () => { readCopperEditor(); selectedCopperId = zone.id; copperError(); renderCopperDraft(); });
+      item.append(button); list.append(item);
+    }
+  }
+
+  function renderCopperDraft() {
+    renderCopperList();
+    const zone = selectedCopperZone();
+    $('copperEditor').hidden = !zone; $('copperEmpty').hidden = Boolean(zone);
+    $('applyCopper').disabled = busy || copperApplying;
+    if (!zone) return;
+    $('copperName').value = zone.name || '';
+    $('copperLayer').value = String(zone.layer); $('copperNet').value = String(zone.net);
+    $('copperStyle').value = zone.style || 'solid'; $('copperPadConnection').value = zone.padConnection || 'spoke';
+    $('copperEnabled').checked = zone.enabled !== false; $('copperKeepIslands').checked = Boolean(zone.keepIslands);
+    for (const [field, id] of Object.entries(copperNumberFields)) $(id).value = Number.isFinite(zone[field]) ? zone[field] : '';
+    updateCopperDependentFields(zone);
+    $('copperBoundaryCount').textContent = `${number(zone.points?.length || 0)} points`;
+    const list = $('copperCutoutList'); list.replaceChildren();
+    for (const [index, points] of (zone.cutouts || []).entries()) {
+      const row = document.createElement('div'); row.className = 'copper-cutout-row';
+      const label = document.createElement('span'); label.textContent = `Cutout ${index + 1} · ${number(points.length)} points`;
+      const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Redraw'; edit.setAttribute('aria-label', `Redraw cutout ${index + 1}`); edit.addEventListener('click', () => startCopperDrawing('cutout', index));
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.setAttribute('aria-label', `Delete cutout ${index + 1}`); remove.addEventListener('click', () => { readCopperEditor(); zone.cutouts.splice(index, 1); renderCopperDraft(); });
+      row.append(label, edit, remove); list.append(row);
+    }
+    if (!zone.cutouts?.length) { const empty = document.createElement('p'); empty.className = 'copper-helper'; empty.textContent = 'No cutouts. Draw one to leave a component or an area clear.'; list.append(empty); }
+  }
+
+  function validateCopperPolygon(points) {
+    points = openCopperRing(points);
+    if (!Array.isArray(points) || points.length < 3) throw new Error('Place at least three points to make a closed shape.');
+    if (points.some(point => !Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite))) throw new Error('The boundary contains an invalid point. Redraw this shape.');
+    let twiceArea = 0;
+    for (let i = 0; i < points.length; i++) { const next = points[(i + 1) % points.length]; twiceArea += points[i][0] * next[1] - next[0] * points[i][1]; }
+    if (Math.abs(twiceArea) < 1e-12) throw new Error('This shape has no area. Place points around the area you want to fill.');
+    const orientation = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const onSegment = (a, b, p) => Math.abs(orientation(a, b, p)) < 1e-12 && p[0] >= Math.min(a[0], b[0]) - 1e-12 && p[0] <= Math.max(a[0], b[0]) + 1e-12 && p[1] >= Math.min(a[1], b[1]) - 1e-12 && p[1] <= Math.max(a[1], b[1]) + 1e-12;
+    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+      if (j === i + 1 || (i === 0 && j === points.length - 1)) continue;
+      const a = points[i], b = points[(i + 1) % points.length], c = points[j], d = points[(j + 1) % points.length];
+      const crossed = orientation(a, b, c) * orientation(a, b, d) < 0 && orientation(c, d, a) * orientation(c, d, b) < 0;
+      if (crossed || onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b)) throw new Error('The boundary crosses or touches itself. Undo a point and draw a simple closed shape.');
+    }
+  }
+
+  async function applyCopper() {
+    if (!copperData || copperDrawing || busy || isActive() || currentState?.job?.id !== copperData.jobId) return;
+    readCopperEditor(); copperError();
+    try {
+      for (const zone of copperDrafts) {
+        zone.points = openCopperRing(zone.points);
+        zone.cutouts = (zone.cutouts || []).map(openCopperRing);
+        validateCopperPolygon(zone.points);
+        for (const points of zone.cutouts || []) validateCopperPolygon(points);
+        for (const field of ['clearance', 'edgeClearance']) if (!Number.isFinite(zone[field]) || zone[field] < 0) throw new Error('Enter a clearance of zero or greater.');
+        if (zone.padConnection === 'spoke') for (const field of ['thermalGap', 'spokeWidth']) if (!Number.isFinite(zone[field]) || zone[field] <= 0) throw new Error('Enter a spoke gap and width greater than zero.');
+        if (zone.style !== 'solid') {
+          if (!Number.isFinite(zone.gridPitch) || !Number.isFinite(zone.gridWidth) || zone.gridWidth <= 0 || zone.gridPitch <= zone.gridWidth) throw new Error('Grid pitch must be greater than its line width, and both must be greater than zero.');
+        }
+      }
+    } catch (error) { copperError(error.message); return; }
+    busy = copperApplying = true; updateControls(); $('applyCopper').textContent = 'Building copper…';
+    try {
+      const result = await post('/api/copper-zones', { jobId: copperData.jobId, zones: copperDrafts });
+      if (result?.copperError || result?.job?.copperError) throw new Error(result.copperError || result.job.copperError);
+      $('copperDialog').close(); focusedCopperId = null; copperData = null; copperDrafts = []; selectedCopperId = null;
+      toast('Building copper fills and checking their connections…');
+    } catch (error) { copperError(error.message); }
+    finally { busy = copperApplying = false; $('applyCopper').textContent = 'Apply & rebuild'; updateControls(); }
+  }
+
+  function discardCopperDraft() {
+    copperDrawing = null; copperData = null; copperDrafts = []; selectedCopperId = null;
+    $('copperDrawToolbar').hidden = true; canvas.classList.remove('drawing-copper'); $('previewModeTag').textContent = 'BOARD VIEW';
+    if ($('copperDialog').open) $('copperDialog').close();
+    draw();
+  }
+
+  function startCopperDrawing(kind, cutoutIndex = null, newZone = false) {
+    if (!selectedCopperZone() || busy || isActive()) return;
+    readCopperEditor(); copperError();
+    if (kind === 'cutout' && cutoutIndex === null && (selectedCopperZone().cutouts || []).length >= 64) { copperError('A copper area can have up to 64 cutouts. Edit or delete an existing cutout.'); return; }
+    copperDrawing = { zoneId: selectedCopperId, kind, cutoutIndex, newZone, points: [], cursor: null };
+    $('copperDialog').close(); view.dragging = false; canvas.classList.remove('dragging'); canvas.classList.add('drawing-copper');
+    $('previewModeTag').textContent = kind === 'cutout' ? 'DRAW CUTOUT' : 'DRAW COPPER';
+    $('copperDrawTitle').textContent = kind === 'cutout' ? 'Draw an area to leave clear' : 'Draw the copper boundary';
+    $('copperDrawToolbar').hidden = false;
+    updateCopperDrawingControls(); updateControls(); canvas.focus(); draw();
+  }
+
+  function updateCopperDrawingControls(message = '') {
+    const count = copperDrawing?.points.length || 0;
+    $('undoCopperPoint').disabled = count === 0; $('finishCopperDrawing').disabled = count < 3;
+    $('copperDrawInstruction').textContent = message || `${count} ${count === 1 ? 'point' : 'points'} · click to add · scroll to zoom · Enter to finish · Escape to cancel`;
+  }
+
+  function endCopperDrawing(commit) {
+    if (!copperDrawing) return;
+    const drawing = copperDrawing, zone = copperDrafts.find(zone => zone.id === drawing.zoneId);
+    if (commit) {
+      try { validateCopperPolygon(drawing.points); }
+      catch (error) { updateCopperDrawingControls(error.message); toast(error.message, true); return; }
+      if (zone) {
+        if (drawing.kind === 'boundary') zone.points = drawing.points;
+        else { zone.cutouts ||= []; if (drawing.cutoutIndex === null) zone.cutouts.push(drawing.points); else zone.cutouts[drawing.cutoutIndex] = drawing.points; }
+      }
+    } else if (drawing.newZone) { copperDrafts = copperDrafts.filter(item => item.id !== drawing.zoneId); selectedCopperId = copperDrafts[0]?.id ?? null; }
+    copperDrawing = null; $('copperDrawToolbar').hidden = true; canvas.classList.remove('drawing-copper'); $('previewModeTag').textContent = 'BOARD VIEW';
+    renderCopperDraft(); $('copperDialog').showModal(); updateControls(); draw();
+  }
+
+  function addCopperPoint(event) {
+    const rect = canvas.getBoundingClientRect(), px = event.clientX - rect.left, py = event.clientY - rect.top;
+    const points = copperDrawing.points;
+    if (points.length >= 3) { const first = worldToScreen(...points[0]); if (Math.hypot(px - first[0], py - first[1]) < 10) { endCopperDrawing(true); return; } }
+    if (points.length) { const last = worldToScreen(...points[points.length - 1]); if (Math.hypot(px - last[0], py - last[1]) < 2) return; }
+    if (points.length >= 1000) { updateCopperDrawingControls('This boundary has 1,000 points. Finish the shape or undo a point.'); return; }
+    points.push(screenToWorld(px, py)); updateCopperDrawingControls(); draw();
+  }
+
+  const copperPreviewCache = new WeakMap();
+  function copperPreviewPath(fill) {
+    let cached = copperPreviewCache.get(fill);
+    if (cached && cached.scale === view.scale && cached.x === view.x && cached.y === view.y) return cached.path;
+    const result = new Path2D();
+    for (const points of [fill.points, ...(fill.holes || [])]) {
+      if (!Array.isArray(points) || points.length < 3) continue;
+      let first = true;
+      for (const point of points) { const p = worldToScreen(point[0], point[1]); if (first) { result.moveTo(p[0], p[1]); first = false; } else result.lineTo(p[0], p[1]); }
+      result.closePath();
+    }
+    copperPreviewCache.set(fill, { scale: view.scale, x: view.x, y: view.y, path: result }); return result;
+  }
+
+  function paintCopperLayer(layer) {
+    if (!$('showCopper').checked) return;
+    ctx.save(); ctx.fillStyle = layerColor(layer); ctx.globalAlpha = .25;
+    for (const fill of board.copperFills || []) if (layerKey(fill.layer) === layerKey(layer)) ctx.fill(copperPreviewPath(fill), 'evenodd');
+    ctx.restore();
+  }
+
+  function paintCopperBoundaries() {
+    if (!$('showCopper').checked) return;
+    const draftZone = (copperDrawing || focusedCopperId) && selectedCopperZone();
+    const zones = draftZone ? [draftZone] : board.copperZones || [];
+    ctx.save(); ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
+    for (const zone of zones) {
+      if (!layerVisible(zone.layer)) continue;
+      ctx.strokeStyle = focusedCopperId === zone.id || copperDrawing?.zoneId === zone.id ? '#cbf3df' : layerColor(zone.layer);
+      ctx.globalAlpha = focusedCopperId === zone.id || copperDrawing?.zoneId === zone.id ? .9 : .4;
+      if (path(zone.points, true)) ctx.stroke();
+      ctx.strokeStyle = '#efb891';
+      for (const points of zone.cutouts || []) if (path(points, true)) ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function paintCopperDrawing() {
+    if (!copperDrawing) return;
+    ctx.save(); ctx.strokeStyle = copperDrawing.kind === 'cutout' ? '#ffcc9a' : '#b8ffe3'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 2; ctx.globalAlpha = 1;
+    const points = copperDrawing.points;
+    if (points.length > 1 && path(points, false)) ctx.stroke();
+    if (points.length && copperDrawing.cursor) {
+      ctx.setLineDash([5, 4]);
+      if (path([points[points.length - 1], copperDrawing.cursor])) ctx.stroke();
+      if (points.length >= 2 && path([copperDrawing.cursor, points[0]])) ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const [index, point] of points.entries()) { const [x, y] = worldToScreen(...point); ctx.beginPath(); ctx.arc(x, y, index === 0 ? 6 : 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#dff8ec'; ctx.font = '13px sans-serif'; ctx.fillText(String(index + 1), x + 9, y - 8); ctx.fillStyle = ctx.strokeStyle; }
+    ctx.restore();
+  }
+
+  function showSelectedCopper() {
+    readCopperEditor();
+    const zone = selectedCopperZone(); if (!zone?.points?.length) return;
+    focusedCopperId = zone.id; visibleLayers.set(layerKey(zone.layer), true); $('showCopper').checked = true; updateLayers();
+    const xs = zone.points.map(point => point[0]), ys = zone.points.map(point => point[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const width = Math.max(.01, maxX - minX), height = Math.max(.01, maxY - minY);
+    view.scale = Math.min((view.width - 70) / width, (view.height - 70) / height); view.x = view.width / 2 - (minX + maxX) / 2 * view.scale; view.y = view.height / 2 + (minY + maxY) / 2 * view.scale;
+    updateZoom(); draw();
+    $('copperDialog').close();
+    toast('Draft boundary shown. Your edits are kept; reopen Copper fills to continue.');
+  }
+
   function readRoutingOptions() {
     return { deepSearch: $('deepSearch').checked, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
   }
@@ -1378,7 +1759,7 @@
   function saveSettings(settings = readRoutingOptions()) { try { localStorage.setItem('ramenrouter.browser.settings.v1', JSON.stringify(settings)); } catch {} }
 
   async function startRouting(enableViaInPad = false, relaxDirections = false) {
-    if (busy || isActive() || hasPreviousRulesDecision() || !connected || $('netLayersDialog').open || !$('settingsForm').checkValidity()) return;
+    if (busy || copperDrawing || isActive() || hasPreviousRulesDecision() || !connected || $('copperDialog').open || $('netLayersDialog').open || !$('settingsForm').checkValidity()) return;
     if (enableViaInPad) {
       if (!canSuggestViaInPad()) return;
       $('viaInPad').checked = true;
@@ -1666,25 +2047,35 @@
   async function upload(file) {
     if (!file) return;
     if (hasPreviousRulesDecision()) { $('fileInput').value = ''; toast('Choose whether to reuse the previous rules first.'); return; }
+    if (copperDrawing || $('copperDialog').open) { toast('Finish or cancel editing your copper areas before loading another board.'); return; }
     if (busy || isActive() || !connected) return;
     if (!/\.dsn$/i.test(file.name)) { toast('Choose a Specctra .dsn file exported from your PCB editor.', true); return; }
     if (file.size === 0) { toast('This file is empty. Export a new DSN from your PCB editor.', true); return; }
     busy = true; updateControls(); $('boardBusy').hidden = false;
     try {
       const result = await api(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-      if (result) applyState(result);
+      if (result) { applyState(result); if (hasSavedCopperSettings) copperLoadPromptJobId = result.job?.id || null; }
       toast(`${file.name} imported. Reading board data…`);
     } catch (error) { toast(error.message, true); }
     finally { busy = false; $('fileInput').value = ''; updateControls(); $('boardBusy').hidden = false; setTimeout(() => { if (!fetchingBoard) $('boardBusy').hidden = true; }, 1000); }
   }
 
-  async function download(type) {
-    if (type === 'ses') { downloadedSesJobId = currentState?.job?.id; updateExportAttention(); }
+  async function download(type, skipCopperPrompt = false) {
+    if (!skipCopperPrompt && ['ses', 'dsn'].includes(type) && currentState?.job?.copperSummary?.zoneCount > 0) {
+      pendingCopperExport = { jobId: currentState.job.id, type };
+      $('copperExportDialog').showModal();
+      return;
+    }
     try {
       if (!nativeEngine || typeof nativeEngine.download !== 'function') throw new Error('Browser downloads are unavailable. Reopen index.html.');
       await nativeEngine.download(type);
+      if (type === 'ses') downloadedSesJobId = currentState?.job?.id;
+      if (type === 'dsn') downloadedDsnJobId = currentState?.job?.id;
+      if (type === 'copper') { downloadedCopperJobId = currentState?.job?.id; rememberSavedCopperSettings(); }
+      updateExportAttention();
       toast(type === 'log' ? 'Engine log downloaded.' : (type === 'report' ? 'Rule-check report downloaded.' : 'Export downloaded. Validate the result in your PCB editor.'));
-    } catch (error) { toast(error.message, true); }
+      return true;
+    } catch (error) { toast(error.message, true); return false; }
   }
 
   // Reports are built only on request, outside the routing/animation hot path.
@@ -1909,6 +2300,41 @@
     finally { $('benchmarkFileInput').value = ''; }
   }
 
+  $('loadCopperSettings').addEventListener('click', () => $('copperSettingsFileInput').click());
+  $('copperSettingsFileInput').addEventListener('change', event => void importCopperSettings(event.target.files[0]));
+  $('saveCopperAndExport').addEventListener('click', () => void completeCopperExport(true));
+  $('exportCopperRoutesOnly').addEventListener('click', () => void completeCopperExport(false));
+  for (const id of ['closeCopperExport', 'cancelCopperExport']) $(id).addEventListener('click', () => { if (!busy) { pendingCopperExport = null; $('copperExportDialog').close(); } });
+  $('copperExportDialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); else pendingCopperExport = null; });
+  $('loadPreviousCopper').addEventListener('click', () => { copperLoadPromptJobId = null; $('copperLoadDialog').close(); $('copperSettingsFileInput').click(); });
+  for (const id of ['skipPreviousCopper', 'closeCopperLoad']) $(id).addEventListener('click', () => { copperLoadPromptJobId = null; $('copperLoadDialog').close(); });
+  $('copperLoadDialog').addEventListener('cancel', () => { copperLoadPromptJobId = null; });
+  $('copperButton').addEventListener('click', () => void openCopper());
+  for (const id of ['closeCopper', 'cancelCopper']) $(id).addEventListener('click', () => { if (!busy && !copperApplying) { discardCopperDraft(); updateControls(); } });
+  $('copperDialog').addEventListener('cancel', event => { event.preventDefault(); if (!busy && !copperApplying) { discardCopperDraft(); updateControls(); } });
+  $('copperDialog').addEventListener('close', updateControls);
+  $('copperForm').addEventListener('submit', event => event.preventDefault());
+  $('copperForm').addEventListener('input', readCopperEditor);
+  $('copperForm').addEventListener('change', readCopperEditor);
+  $('copperNet').addEventListener('change', () => {
+    const zone = selectedCopperZone(), net = copperData?.nets.find(net => String(net.id) === $('copperNet').value);
+    if (!zone || !net) return;
+    if (Number.isFinite(net.clearance)) { zone.clearance = Math.max(Number.isFinite(zone.clearance) ? zone.clearance : 0, net.clearance); $('copperClearance').value = zone.clearance; }
+    if (Number.isFinite(net.width) && net.width > 0) { zone.spokeWidth = Math.max(Number.isFinite(zone.spokeWidth) ? zone.spokeWidth : 0, net.width); $('copperSpokeWidth').value = zone.spokeWidth; }
+    readCopperEditor();
+  });
+  $('applyCopper').addEventListener('click', () => void applyCopper());
+  $('addWholeCopper').addEventListener('click', () => addCopperArea(false));
+  $('addDrawnCopper').addEventListener('click', () => addCopperArea(true));
+  $('deleteCopperZone').addEventListener('click', () => { copperDrafts = copperDrafts.filter(zone => zone.id !== selectedCopperId); selectedCopperId = copperDrafts[0]?.id ?? null; copperError(); renderCopperDraft(); });
+  $('redrawCopperBoundary').addEventListener('click', () => startCopperDrawing('boundary'));
+  $('wholeCopperBoundary').addEventListener('click', () => { readCopperEditor(); const zone = selectedCopperZone(); if (zone) { try { zone.points = boardCopperBoundary(); copperError(); renderCopperDraft(); } catch (error) { copperError(error.message); } } });
+  $('drawCopperCutout').addEventListener('click', () => startCopperDrawing('cutout'));
+  $('showCopperArea').addEventListener('click', showSelectedCopper);
+  $('finishCopperDrawing').addEventListener('click', () => endCopperDrawing(true));
+  $('cancelCopperDrawing').addEventListener('click', () => endCopperDrawing(false));
+  $('undoCopperPoint').addEventListener('click', () => { if (copperDrawing) { copperDrawing.points.pop(); updateCopperDrawingControls(); draw(); } });
+  $('showCopper').addEventListener('change', draw);
   $('previousRulesReuse').addEventListener('click', () => void choosePreviousRules(true));
   $('previousRulesImported').addEventListener('click', () => void choosePreviousRules(false));
   $('closePreviousRules').addEventListener('click', () => void choosePreviousRules(false));
@@ -1955,7 +2381,7 @@
   });
   $('fileInput').addEventListener('change', event => void upload(event.target.files[0]));
   for (const eventName of ['dragenter', 'dragover']) document.addEventListener(eventName, event => {
-    event.preventDefault(); if (connected && !isActive() && !busy && !hasPreviousRulesDecision()) $('dropzone').classList.add('drag-over');
+    event.preventDefault(); if (connected && !isActive() && !busy && !copperDrawing && !$('copperDialog').open && !hasPreviousRulesDecision()) $('dropzone').classList.add('drag-over');
   });
   document.addEventListener('dragleave', event => { if (!event.relatedTarget) $('dropzone').classList.remove('drag-over'); });
   document.addEventListener('drop', event => { event.preventDefault(); $('dropzone').classList.remove('drag-over'); void upload(event.dataTransfer?.files[0]); });
@@ -1995,7 +2421,7 @@
     catch (error) { forcedStop = false; toast(error.message, true); updateControls(); }
   });
   $('forceStopButton').title = 'Immediately stop the engine and keep any checked result.';
-  for (const [id, type] of [['downloadSes', 'ses'], ['downloadDsn', 'dsn'], ['downloadChecks', 'report'], ['downloadLog', 'log']]) $(id).addEventListener('click', () => void download(type));
+  for (const [id, type] of [['downloadSes', 'ses'], ['downloadDsn', 'dsn'], ['downloadChecks', 'report'], ['downloadLog', 'log'], ['downloadCopper', 'copper']]) $(id).addEventListener('click', () => void download(type));
   $('copyLog').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(lastLogs); toast('Engine log copied.'); }
     catch { toast('Clipboard access unavailable. Use Engine log to download it.', true); }
@@ -2027,18 +2453,25 @@
   window.addEventListener('pagehide', () => { stopActivityFrames(); stopProgressClock(); });
   window.addEventListener('pageshow', () => { syncActivityVisual(); updateRunProgress(); });
   canvas.addEventListener('wheel', event => { if (!board) return; event.preventDefault(); const rect = canvas.getBoundingClientRect(); zoomBy(Math.exp(-event.deltaY * .0018), event.clientX - rect.left, event.clientY - rect.top); }, { passive: false });
-  canvas.addEventListener('pointerdown', event => { if (!board || event.button !== 0) return; view.dragging = true; view.pointerX = event.clientX; view.pointerY = event.clientY; canvas.setPointerCapture(event.pointerId); canvas.classList.add('dragging'); });
+  canvas.addEventListener('pointerdown', event => { if (!board || event.button !== 0) return; if (copperDrawing) { event.preventDefault(); addCopperPoint(event); return; } view.dragging = true; view.pointerX = event.clientX; view.pointerY = event.clientY; canvas.setPointerCapture(event.pointerId); canvas.classList.add('dragging'); });
   canvas.addEventListener('pointermove', event => {
     const rect = canvas.getBoundingClientRect();
+    if (copperDrawing) { copperDrawing.cursor = screenToWorld(event.clientX - rect.left, event.clientY - rect.top); draw(); }
     if (view.dragging) { view.x += event.clientX - view.pointerX; view.y += event.clientY - view.pointerY; view.pointerX = event.clientX; view.pointerY = event.clientY; draw(); }
     if (board) { const [x, y] = screenToWorld(event.clientX - rect.left, event.clientY - rect.top); $('cursorPosition').textContent = `X ${x.toFixed(2)} · Y ${y.toFixed(2)} mm`; }
   });
   const endDrag = () => { view.dragging = false; canvas.classList.remove('dragging'); };
   canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('lostpointercapture', endDrag);
-  canvas.addEventListener('pointerleave', () => { $('cursorPosition').textContent = 'Drag to pan · scroll to zoom'; });
-  canvas.addEventListener('dblclick', fitBoard);
+  canvas.addEventListener('pointerleave', () => { if (copperDrawing) { copperDrawing.cursor = null; draw(); } $('cursorPosition').textContent = copperDrawing ? 'Click to plot points · scroll to zoom' : 'Drag to pan · scroll to zoom'; });
+  canvas.addEventListener('dblclick', event => { if (copperDrawing) { event.preventDefault(); endCopperDrawing(true); } else fitBoard(); });
+  canvas.addEventListener('contextmenu', event => { if (copperDrawing) { event.preventDefault(); copperDrawing.points.pop(); updateCopperDrawingControls(); draw(); } });
   document.addEventListener('keydown', event => {
-    if (event.target.matches('input,textarea,select') || $('aboutDialog').open || $('clearRoutingDialog').open || $('netLayersDialog').open || $('runReportDialog').open || $('previousRulesDialog').open || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (copperDrawing && !event.target.matches('input,textarea,select')) {
+      if (event.key === 'Escape') { event.preventDefault(); endCopperDrawing(false); return; }
+      if (event.key === 'Enter') { event.preventDefault(); endCopperDrawing(true); return; }
+      if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); copperDrawing.points.pop(); updateCopperDrawingControls(); draw(); return; }
+    }
+    if (event.target.matches('input,textarea,select') || $('copperDialog').open || $('copperExportDialog').open || $('copperLoadDialog').open || $('aboutDialog').open || $('clearRoutingDialog').open || $('netLayersDialog').open || $('runReportDialog').open || $('previousRulesDialog').open || event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key.toLowerCase() === 'f') { event.preventDefault(); fitBoard(); }
   });
   if (typeof nativeEngine?.subscribeActivity === 'function') nativeEngine.subscribeActivity(event => {
@@ -2049,6 +2482,7 @@
     updateEngineActivity();
   });
   restoreSettings();
+  try { hasSavedCopperSettings = localStorage.getItem('ramenrouter.copper.settings.saved.v1') === 'yes'; } catch {}
   new ResizeObserver(resizeCanvas).observe($('canvasWrap'));
   resizeCanvas(); updateControls();
   $('disconnectBanner').hidden = true;
