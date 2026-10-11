@@ -654,7 +654,7 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.2.21']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.2.22']],library,network]];
     return astWrite(session)+'\n';
   }
   return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers };

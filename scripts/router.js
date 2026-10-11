@@ -32,8 +32,11 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const started=Date.now(),timeout=(options.timeoutMinutes||30)*60000,log=[];
     const stopped=()=>isCancelled()||(!yieldTask?.managesBudget&&Date.now()-started>=timeout);
     const attemptLimit=options.fanoutOnly?0:options.deepSearch===false?1:Math.max(1,Math.min(options.maxPasses||12,100));
-    const refinementLimit=options.fanoutOnly||options.optimize===false||!optimizer?0:options.deepSearch===false?1:2;
-    const repairLimit=options.fanoutOnly||options.deepSearch===false?0:18;
+    // A larger attempt budget adds later stages; it must not postpone repair
+    // of a promising layout reached by the ordinary twelve-attempt search.
+    const stageCount=Math.max(1,Math.ceil(attemptLimit/12));
+    const refinementLimit=options.fanoutOnly||options.optimize===false||!optimizer?0:(options.deepSearch===false?1:2)*stageCount;
+    const repairLimit=options.fanoutOnly||options.deepSearch===false?0:18*stageCount;
     const counter=(limit,conditional)=>({current:0,limit,completed:0,status:limit?'pending':'skipped',...(conditional===undefined?{}:{conditional})});
     const counters={attempt:counter(attemptLimit),refinement:counter(refinementLimit,refinementLimit>1),repair:counter(repairLimit,true),work:null};
     const counterSnapshot=()=>({attempt:{...counters.attempt},refinement:{...counters.refinement},repair:{...counters.repair},work:counters.work?{...counters.work}:null});
@@ -591,10 +594,30 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     function distanceToTree(group,points){let best=Infinity;for(const p of group.points)for(const q of points)best=Math.min(best,Math.hypot(p[0]-q[0],p[1]-q[1]));return best;}
     function scoreBetter(a,b){if(a.totalViolations>baseTotal||a.clearanceViolations>baseViolation||a.belowNominalWidthTraceCount>baseWidth)return false;const key=s=>shortNets.size?[s.unrouted,s.totalViolations,s.belowNominalWidthTraceCount,s.preferredTraceLengthMm,s.viaCount,s.traceLengthMm]:[s.unrouted,s.viaCount,s.traceLengthMm];let ka=key(a),kb=key(b);for(let i=0;i<ka.length;i++){if(ka[i]<kb[i]-1e-8)return true;if(ka[i]>kb[i]+1e-8)return false;}return false;}
     // Bounded complete-board restarts with difficult-net-first ordering and rip-up repair.
-    let failures=new Set(),passes=attemptLimit,completeWithoutImprovement=0;
+    let failures=new Set(),passes=attemptLimit,completeWithoutImprovement=0,routingDone=false;
     const completeOrders=new Set();
+    const viaKey=v=>JSON.stringify([v.net,v.padstack,v.x,v.y,v.diameter,v.layers]);
+    const originalViaKeys=new Set(original.vias.map(viaKey));
+    function restoreRoutingPrefix(candidate){
+      const restored=copy(candidate);
+      restored.traces=[...copy(original.traces),...restored.traces.slice(original.traces.length)];
+      restored.vias=[...copy(original.vias),...restored.vias.filter(v=>!originalViaKeys.has(viaKey(v)))];
+      return restored;
+    }
     say('Native router: '+nx+' × '+ny+' grid, '+layerCount+' layers, '+step.toPrecision(3)+' '+original.units.name+' step.',{phase:'routing',pass:0,board:copy(best),stats:bestStats});
-    for(let pass=1;pass<=passes&&!stopped();pass++){
+    for(let stage=1;stage<=stageCount&&!stopped();stage++){
+    const stageEnd=Math.min(stage*12,passes);
+    const stageHasMore=()=>stageEnd<passes&&!routingDone&&!(bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0));
+    // Refinement may shorten imported stubs or remove an unused imported via.
+    // Rebuild and check the immutable routing prefix before another stage can
+    // use index-based rip-up, while leaving the better export untouched.
+    const workingSource=best;let workingBest=best,workingSafe=true;
+    if(stage>1){
+      workingBest=restoreRoutingPrefix(best);const workingStats=stats(workingBest,true);
+      workingSafe=workingStats.unrouted<=bestStats.unrouted&&['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>workingStats[key]<=bestStats[key]);
+      if(!workingSafe){workingBest=original;say('Keeping the checked result; the next routing stage will start from the original copper.',{phase:'checking'});}
+    }
+    for(let pass=(stage-1)*12+1;pass<=stageEnd&&!stopped();pass++){
       let alternateOrder=null;
       if(shortNets.size&&bestStats.unrouted===0&&initialStats.unrouted>0){
         // Once complete, only try distinct full-board orders. A single routable
@@ -603,11 +626,12 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
           const candidate=prioritizeShort(shuffled(routingNets,rng(0x52414D45+pass*7919+variant*104729)));
           if(!completeOrders.has(candidate.map(n=>n.id).join(','))){alternateOrder=candidate;break;}
         }
-        if(!alternateOrder){say('No new selected-net routing order to try; keeping the shortest checked result.',{phase:'routing'});break;}
+        if(!alternateOrder){say('No new selected-net routing order to try; keeping the shortest checked result.',{phase:'routing'});routingDone=true;break;}
       }
       counters.attempt.current=pass;counters.attempt.status='running';counters.work=null;reportCounters('routing');
       const previousShortLength=bestStats.preferredTraceLengthMm,wasComplete=bestStats.unrouted===0;
-      const repairMode=pass>1&&pass%2===0&&!(shortNets.size&&wasComplete);board=copy(repairMode?best:original);generation++;let random=rng(0x52414D45+pass*7919),order=shuffled(routingNets,random);
+      const useWorkingSeed=best===workingSource;
+      const repairMode=pass>1&&pass%2===0&&!(shortNets.size&&wasComplete)&&(!useWorkingSeed||workingSafe);board=copy(repairMode?(useWorkingSeed?workingBest:best):original);generation++;let random=rng(0x52414D45+pass*7919),order=shuffled(routingNets,random);
       if(pass===1)await sortByDensity(order);else order.sort((a,b)=>(failures.has(b.id)?1:0)-(failures.has(a.id)?1:0));
       let queue=(alternateOrder||prioritizeShort(order)).filter(n=>!repairMode||failures.has(n.id)),attempts=new Map(),currentFailures=new Set(),processed=0,maxWork=nets.length*(pass===1?2:3);
       if(shortNets.size&&!repairMode)completeOrders.add(queue.map(n=>n.id).join(','));
@@ -618,14 +642,16 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
         if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:'Pass '+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
       }
       emit({type:'progress',phase:'checking',pass,message:'Checking full clearances and connectivity'});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say('Pass '+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}if(bestStats.unrouted===0){
-        if(!shortNets.size||initialStats.unrouted===0)break;
+        if(!shortNets.size||initialStats.unrouted===0){routingDone=true;break;}
         completeWithoutImprovement=wasComplete&&bestStats.preferredTraceLengthMm>=previousShortLength-EPS?completeWithoutImprovement+1:0;
-        if(completeWithoutImprovement>=3){say('Selected-net lengths did not improve in 3 complete-board attempts; keeping the shortest checked result.',{phase:'routing'});break;}
+        if(completeWithoutImprovement>=3){say('Selected-net lengths did not improve in 3 complete-board attempts; keeping the shortest checked result.',{phase:'routing'});routingDone=true;break;}
         if(pass<passes&&!stopped())say('All connections are complete. Trying another routing order for shorter selected nets.',{phase:'routing'});
       }
-      if(inaccessibleGroups.size&&!failures.size)break;
+      if(inaccessibleGroups.size&&!failures.size){routingDone=true;break;}
     }
-    finishCounter('attempt','routing');
+    if(stageEnd>=passes||routingDone)finishCounter('attempt','routing');
+    else if(!stopped()){counters.attempt.status='pending';counters.work=null;reportCounters('routing');}
+    if(stageCount>1&&!stopped())say('Checking routing stage '+stage+'/'+stageCount+' after '+counters.attempt.completed+' attempts.',{phase:'checking'});
     if(options.optimize!==false&&optimizer&&!stopped()){
       counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
       emit({type:'progress',phase:'optimizing',message:'Refining the checked route'});
@@ -636,13 +662,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     // When only a few connections remain, repair local congestion without
     // discarding whole nets. Every retained result still passes the full checks.
     if(options.deepSearch!==false&&bestStats.unrouted>0&&bestStats.unrouted<=6&&(!inaccessibleGroups.size||failures.size)&&!stopped()){
-      const beforeFinishing=bestStats.unrouted,viaKey=v=>JSON.stringify([v.net,v.padstack,v.x,v.y,v.diameter,v.layers]);
-      const originalViaKeys=new Set(original.vias.map(viaKey));
+      const beforeFinishing=bestStats.unrouted;
       // Refinement can reshape escape stubs and remove unused escape vias.
       // Rebuild the immutable prefix before the router indexes generated copper.
-      const restored=copy(best);
-      restored.traces=[...copy(original.traces),...restored.traces.slice(original.traces.length)];
-      restored.vias=[...copy(original.vias),...restored.vias.filter(v=>!originalViaKeys.has(viaKey(v)))];
+      const restored=restoreRoutingPrefix(best);
       const restoredStats=stats(restored,true);
       const safe=restoredStats.unrouted<=bestStats.unrouted&&restoredStats.totalViolations<=bestStats.totalViolations&&restoredStats.clearanceViolations<=bestStats.clearanceViolations&&restoredStats.belowNominalWidthTraceCount<=bestStats.belowNominalWidthTraceCount;
       if(safe&&!stopped()){
@@ -660,13 +683,13 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
         const repairSeen=new Set([repairSignature(restored)]);
         const legalRepair=(candidate,reference)=>['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>candidate[key]<=reference[key]);
         let repairFailures=new Set(connectivity(repairBest).components.filter(hasRoutableGap).map(c=>c.net));
-        finishing=true;ripHistory.clear();
+        finishing=true;congestionHistory=null;ripHistory.clear();
         const retain=async(measured)=>{
           if(scoreBetter(measured,repairStats)){repairBest=copy(board);repairStats=measured;}
           if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(counters.attempt.current,'finishing');}
         };
         for(repairRound=1;repairRound<=18&&!stopped()&&bestStats.unrouted>0&&(!inaccessibleGroups.size||repairFailures.size);repairRound++){
-          counters.repair.current=repairRound;counters.repair.status='running';counters.work=null;reportCounters('finishing');
+          counters.repair.current=counters.repair.completed+1;counters.repair.status='running';counters.work=null;reportCounters('finishing');
           board=copy(repairSeed);generation++;
           let random=rng(0x52414D45+repairRound*7919),order=shuffled(routingNets,random);
           if(repairRound===1)await sortByDensity(order);else order.sort((a,b)=>(repairFailures.has(b.id)?1:0)-(repairFailures.has(a.id)?1:0));
@@ -705,16 +728,29 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
           say('Finishing repair '+repairRound+': '+measured.unrouted+' remaining; best '+bestStats.unrouted+' remaining.',{phase:'finishing',pass:counters.attempt.current,board:copy(best),stats:bestStats});
           if(!stopped()){counters.repair.completed++;reportCounters('finishing');}
         }
-        finishing=false;finishCounter('repair','finishing');
+        finishing=false;
+        if(!stageHasMore())finishCounter('repair','finishing');
+        else if(!stopped()){counters.repair.status='pending';counters.work=null;reportCounters('finishing');}
         if(bestStats.unrouted<beforeFinishing&&options.optimize!==false&&optimizer&&!stopped()){
           counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
           emit({type:'progress',phase:'optimizing',message:'Refining the repaired route'});
           const optimized=await optimizer.optimize(copy(best),options,emit,stopped,refinementWork),measured=stats(optimized,true);
           if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
-          if(!stopped()){counters.refinement.completed++;counters.refinement.status='done';counters.work=null;reportCounters('optimizing');}
+          if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
         }
       }else if(!safe)say('Keeping the checked route: escape restoration did not pass the full rule check.',{phase:'checking'});
     }
+    finishing=false;repairRound=0;congestionHistory=null;ripHistory.clear();
+    if(routingDone||bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0))break;
+    if(stageEnd<passes&&!stopped()){
+      failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));
+      if(inaccessibleGroups.size&&!failures.size)break;
+      for(const name of ['repair','refinement'])if(counters[name].limit)counters[name].status='pending';
+      counters.work=null;reportCounters('routing');
+      say('Continuing with routing attempt '+(stageEnd+1)+'/'+passes+' after checking the retained result.',{phase:'routing'});
+    }
+    }
+    finishCounter('attempt','routing');
     finishCounter('repair','finishing');finishCounter('refinement','optimizing');
     clearSpatial('route-finished');emit({type:'progress',phase:'checking',board:copy(best),stats:bestStats,message:bestStats.unrouted+' connection(s) remaining.'});
     return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};

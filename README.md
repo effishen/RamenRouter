@@ -158,8 +158,10 @@ If no legal pad escape is found, the log identifies the affected pads instead
 of retrying the same inaccessible connection on every pass. Review the pad
 spacing, via size, obstacles and selected layers before trying again.
 
-With **Smart search** enabled, RamenRouter makes a final focused attempt when
-only a few connections remain. It keeps the best checked result throughout.
+With **Smart search** enabled, RamenRouter checks its progress along the way
+and tries focused repairs when only a few connections remain. More **Routing
+attempts** gives it additional chances if needed. It keeps the best checked
+result throughout.
 
 **Stop job** stops routing and keeps the best checked attempt. Choose **View
 best result** to see the remaining connections and placement advice, or **Keep
