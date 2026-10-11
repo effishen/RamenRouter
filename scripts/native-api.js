@@ -12,9 +12,9 @@
   let job = null, worker = null, workerUrl = null, inputText = null;
   let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, copperTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.3.2',engineVersion:'Ramen JS 0.3.2',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.3.3',engineVersion:'Ramen JS 0.3.3',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
-    const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
+    const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,copperUpdate:job?.copperUpdate,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
   }
   function notify() { notifyActivity(); for (const fn of subscribers) { try { fn(state()); } catch (_) {} } }
@@ -290,7 +290,7 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),...(typeof dsn.exportCopperData==='function'?{copper:dsn.exportCopperData(result)}:{}),report:JSON.stringify({engine:'Ramen JS 0.3.2',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),copperExport:{addedFillsIncluded:false,settingsSavedSeparately:true,requiresMatchingCadPours:!!result.copperZones?.length},initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),...(typeof dsn.exportCopperData==='function'?{copper:dsn.exportCopperData(result)}:{}),report:JSON.stringify({engine:'Ramen JS 0.3.3',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),copperExport:{addedFillsIncluded:false,settingsSavedSeparately:true,requiresMatchingCadPours:!!result.copperZones?.length},initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
@@ -300,8 +300,8 @@
       if(!['inspect','run','clear','layer-rules','copper-zones'].includes(m.type)) return;
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
-        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.2',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.2',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.3',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.3',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
         const b=m.type==='copper-zones'&&m.board?m.board:measured('reading',()=>dsn.parse(m.text,m.name,m.type==='inspect'?{inputCopper:true}:undefined));measurement?.setNets(b.nets);
@@ -421,6 +421,7 @@
     job={id:String(id),name:job?.name||'board.dsn',state:clearing?'clearing':editingRules?'updating_rules':editingCopper?'updating_copper':type==='inspect'?'inspecting':'starting',phase:clearing?'clearing':editingRules?'updating_rules':editingCopper?'copper_fill':'loading',startedAt:Date.now(),settings:options,stats:transactional?saved.job.stats:null,initialStats:null,error:null,clearError:null,ruleError:null,copperError:null,hasOutput:false,routingCleared,layerRulesChanged,layerRuleSummary,routingSummary:transactional?routingSummary(board):null,copperSummary:transactional?copperSummary(board):null,suggestions:{},advice:{items:[]},bestResult:{available:false},revision:0,pass:0};
     job.routingRulesChanged=layerRulesChanged;job.routingRuleSummary=layerRuleSummary;job.ruleMatchFingerprint=ruleMatchFingerprint;job.previousRulesProposal=null;
     job.operation=type;job.counters=null;job.runReport=null;
+    if(editingCopper){const zones=Array.isArray(changes)?changes:changes?.copperSettings?.zones;job.copperUpdate={zoneCount:Array.isArray(zones)?zones.length:null,processed:null,total:null,phase:'preparing',message:"Preparing your copper changes…"};}
     job.benchmarkEnvironment={browser:String(globalThis.navigator?.userAgent||'Unknown browser').slice(0,160),userAgent:String(globalThis.navigator?.userAgent||'').slice(0,512),platform:String(globalThis.navigator?.platform||'').slice(0,160),hardwareConcurrency:globalThis.navigator?.hardwareConcurrency||null,workerCount:1,animationEnabled:typeof options.animationEnabled==='boolean'?options.animationEnabled:benchmarkEnvironment.animationEnabled,animationChanged:false};job.benchmarkEnvironment.initialAnimationEnabled=job.benchmarkEnvironment.animationEnabled;job.benchmarkPauseReceivedAt=null;
     if(type==='run')job.runReport=benchmark.createCollector({appVersion:base.appVersion,settings:options,environment:job.benchmarkEnvironment},()=>0).snapshot('running',true);
     job.budgetGeneration=0;job.pausedAt=null;job.pausedDurationMs=0;job.resumeState=null;
@@ -451,6 +452,10 @@
         log("Paused. Add more time to pick up from here, or stop and keep the best checked result.");notify();return;
       }
       job.lastEngineUpdateAt=Date.now();
+      if(editingCopper&&job.copperUpdate){
+        job.copperUpdate={...job.copperUpdate,phase:m.phase||job.copperUpdate.phase,message:m.message||job.copperUpdate.message};
+        if(m.activity?.stage==='copper-fill'&&Number.isFinite(m.activity.processed)&&Number.isFinite(m.activity.total))job.copperUpdate={...job.copperUpdate,processed:m.activity.processed,total:m.activity.total};
+      }
       if(m.counters){job.counters=m.counters;job.pass=m.counters.attempt?.current??job.pass;}
       if(m.type==='activity'||m.message)job.activity={...(m.activity||{}),visual:m.activity?.visual||null,message:String(m.message||m.activity?.visual?.label||'Working on the board'),phase:m.phase||job.phase,updatedAt:job.lastEngineUpdateAt,source:'engine',sequence:++activitySequence};
       // Spatial updates are small and independent of logs, statistics and board previews.
@@ -462,7 +467,7 @@
         if(!m.board||!m.preview||!m.exports||!m.stats?.drcChecked||!m.stats?.widthRulesChecked||typeof m.editedInput!=='string'){restoreBeforeCopper("Couldn’t update copper fills: there wasn’t a checked result to use.","There wasn’t a checked result to use. Your previous board has been kept.");return;}
         board=m.board;preview=m.preview;exports=m.exports;inputText=m.editedInput;
         job.stats=m.stats;job.initialStats=m.stats;job.routingSummary=routingSummary(board);job.copperSummary=copperSummary(board);updateLayerRules();
-        job.advice=m.advice||{items:[]};job.hasOutput=true;job.state='ready';job.phase='ready';job.endedAt=Date.now();job.revision++;
+        job.advice=m.advice||{items:[]};job.hasOutput=true;job.state='ready';job.phase='ready';job.copperUpdate=null;job.endedAt=Date.now();job.revision++;
         rememberChecked(m);copperTransaction=null;kill();
         log("Copper fills ready: "+job.copperSummary.zoneCount+' zones, '+job.copperSummary.fillCount+" connected copper areas, "+m.stats.unrouted+" connections left.");
         if(job.copperSummary.zoneCount)log("Added fills help with routing, but aren’t included in DSN or SES exports. Refill matching pours in your PCB editor. Save the copper settings separately if you want to use them here again.");

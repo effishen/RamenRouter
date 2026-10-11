@@ -389,7 +389,9 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
         const viaCost=via?searchViaCost(net)+(soft?endpointViaPenalty(via,net,softPenalty):0):0;
         for(const l of sourceLayers){
         let anchors=[{at:[p[0],p[1],l],bridge:[[p[0],p[1]]]}];
-        if(options.fanout!==false){
+        // Exact pad-axis bridges are part of finding a full-width terminal
+        // attachment. They remain available when preparatory fanout is off.
+        {
           const pad=original.pads.find(a=>a.net===net.id&&Math.hypot(a.x-p[0],a.y-p[1])<EPS);
           if(pad){let shape=pad.shapes.find(s=>s.layer===l),box=shape?G.shapeBounds(shape):null;
             let directions=box&&box.maxX-box.minX>box.maxY-box.minY?[[1,0],[-1,0],[0,1],[0,-1]]:[[0,1],[0,-1],[1,0],[-1,0]];
@@ -771,9 +773,11 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       if(scoreBetter(candidate,bestStats)){best=optimized;bestStats=candidate;await checkpoint();}
       if(!stopped()){counters.refinement.completed++;counters.refinement.status=refinementLimit>1?'pending':'done';counters.work=null;reportCounters('optimizing');}
     }
-    // When only a few connections remain, repair local congestion without
-    // discarding whole nets. Every retained result still passes the full checks.
-    if(options.deepSearch!==false&&bestStats.unrouted>0&&bestStats.unrouted<=6&&(!inaccessibleGroups.size||failures.size)&&!stopped()){
+    // A nearly complete large board can still have more than six local gaps.
+    // Scale eligibility with its starting work, capped at twelve connections;
+    // the existing eighteen-round repair budget and full checks stay unchanged.
+    const finishingGapLimit=Math.min(12,Math.max(6,Math.floor(initialStats.unrouted*.1)));
+    if(options.deepSearch!==false&&bestStats.unrouted>0&&bestStats.unrouted<=finishingGapLimit&&(!inaccessibleGroups.size||failures.size)&&!stopped()){
       const beforeFinishing=bestStats.unrouted;
       // Refinement can reshape escape stubs and remove unused escape vias.
       // Rebuild the immutable prefix before the router indexes generated copper.

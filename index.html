@@ -29,7 +29,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.2</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.3</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
     <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
@@ -63,6 +63,7 @@
         <div class="section-kicker">COPPER FILLS <span class="edition-tag">NEW</span></div>
         <button id="copperButton" class="net-layers-button" type="button" aria-haspopup="dialog" disabled>Copper fills <span aria-hidden="true">›</span></button>
         <p id="copperSummary">Give a net a copper area to connect to.</p>
+        <div id="copperWork" class="copper-work" role="status" aria-live="polite" hidden><div><span class="spinner" aria-hidden="true"></span><strong id="copperWorkTitle">Applying copper fills…</strong></div><p id="copperWorkDetail"></p><progress id="copperWorkProgress" aria-label="Copper areas filled"></progress><small>Your previous copper stays on the board until this finishes. Choose Cancel copper changes to keep it.</small></div>
       </div>
       </div>
       <div class="run-controls"><p class="net-layer-conflict" id="netLayerConflict" role="status" hidden></p><button class="primary-button" id="runButton" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6V4Z" fill="currentColor"/></svg><span id="runLabel">Start routing</span><span class="button-shortcut">↵</span></button><button class="stop-button" id="stopButton" hidden><span class="stop-square"></span>Stop routing</button><button class="force-stop-button" id="forceStopButton" hidden>Force stop</button><button class="view-stopped-button" id="viewStoppedResult" type="button" hidden>View best result</button><p class="run-hint" id="runHint">Load a board to begin.</p></div>
@@ -81,6 +82,7 @@
         <div class="connection-activity-label" id="connectionActivityLabel" hidden><strong id="activityVisualTitle">Routing activity</strong><span id="activityVisualDetail">No spot to highlight for this step</span></div>
         <div class="empty-board" id="emptyBoard"><div class="empty-board-art" aria-hidden="true"><svg viewBox="0 0 190 135" fill="none"><rect x="25" y="14" width="140" height="104" rx="10" stroke="currentColor" stroke-width="1.4"/><rect x="74" y="45" width="44" height="43" rx="3" stroke="currentColor" stroke-width="1.4"/><path d="M82 45V33H47v16m45-4V26h48v16m-22 13h24v39h-13M118 68h34M106 88v17H63V84m22 4v8H46V66m28-10H60v15" stroke="currentColor" stroke-width="1.4"/><circle cx="47" cy="52" r="4" stroke="currentColor"/><circle cx="140" cy="46" r="4" stroke="currentColor"/><circle cx="46" cy="62" r="4" stroke="currentColor"/><circle cx="63" cy="80" r="4" stroke="currentColor"/><circle cx="60" cy="75" r="4" stroke="currentColor"/><circle cx="125" cy="94" r="4" stroke="currentColor"/><circle cx="155" cy="68" r="3" stroke="currentColor"/></svg></div><span class="eyebrow">LET'S MAKE IT FIT</span><h1>Got a crowded board?</h1><p>Drop in your DSN, choose your rules,<br>and let it cook.</p><div class="empty-keys"><kbd>SCROLL</kbd> Zoom <span>·</span> <kbd>DRAG</kbd> Pan <span>·</span> <kbd>F</kbd> Fit</div></div>
         <div class="board-busy" id="boardBusy" hidden><span class="spinner"></span><span>Reading your board</span></div>
+        <div id="copperWorkBanner" class="copper-work-banner" aria-hidden="true" hidden><span class="spinner"></span><span><strong>Applying copper fills…</strong><small id="copperWorkBannerDetail"></small></span></div>
         <div class="canvas-label" id="canvasLabel" hidden><span class="live-dot"></span><span id="canvasLabelText">Your starting board</span></div>
         <div class="advice-focus-chip" id="adviceFocusChip" hidden><span id="adviceFocusLabel">Suggestion area</span><button id="clearAdviceFocus" type="button" aria-label="Clear suggestion highlight" title="Clear suggestion highlight">×</button></div>
         <button class="advice-jump" id="showPlacementAdvice" type="button" hidden><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M10 1v5m0 8v5M1 10h5m8 0h5" stroke="currentColor" stroke-width="1.4"/></svg> Placement advice <span id="placementAdviceCount"></span></button>
@@ -153,7 +155,7 @@
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
       <p id="copperExportNote" class="copper-export-note" hidden>These fills help route your board here. They stay here: DSN keeps your file's original copper, and SES carries tracks and vias. Refill matching copper pours in your PCB editor and check the connections.</p>
       <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.2</span><span>Made to fit · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.3</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -239,7 +241,7 @@
         <p class="copper-helper">Click <strong>Apply &amp; rebuild</strong> when you're ready. Loading a saved settings file rebuilds its areas on this board.</p>
       </section>
       <section id="copperEditor" class="copper-editor" aria-labelledby="copperEditTitle" hidden>
-        <div class="copper-editor-heading"><h3 id="copperEditTitle">Area settings</h3><button id="deleteCopperZone" class="copper-delete-button" type="button">Delete area</button></div>
+        <div class="copper-editor-heading"><h3 id="copperEditTitle">Area settings</h3><div class="copper-editor-actions"><button id="copyCopperZone" type="button">Copy area</button><button id="deleteCopperZone" class="copper-delete-button" type="button">Delete area</button></div></div>
         <form id="copperForm">
           <div class="copper-fields">
             <label class="copper-wide">Area name<input id="copperName" type="text" maxlength="100" placeholder="e.g. Ground plane"></label>

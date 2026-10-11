@@ -189,7 +189,7 @@
     $('stopButton').hidden = !active;
     $('runButton').disabled = !available || !job || job.state === 'idle' || active || previousRulesPending;
     $('stopButton').disabled = !available || stopping;
-    $('stopButton').lastChild.textContent = stopping ? ' Stopping…' : 'Stop routing';
+    $('stopButton').lastChild.textContent = stopping ? ' Stopping…' : (job?.state === 'updating_copper' ? ' Cancel copper changes' : 'Stop routing');
     $('forceStopButton').hidden = !stopping || !stoppingSince || Date.now() - stoppingSince < 5000;
     $('forceStopButton').disabled = !available || forcedStop;
     for (const id of ['dropzone', 'replaceButton', 'demoButton']) $(id).disabled = !available || active || previousRulesPending;
@@ -695,6 +695,7 @@
 
   function updateEngineActivity() {
     updateRunProgress();
+    updateCopperWork();
     const job = activityJob();
     const active = activeStates.has(job?.state);
     $('engineActivity').hidden = !active;
@@ -730,7 +731,8 @@
     }
     if (previousJob?.state === 'updating_copper' && job?.state !== 'updating_copper') {
       if (job?.copperError) toast(`Could not apply your copper changes. ${job.copperError}`, true);
-      else if (job?.copperSummary) toast('Copper rebuilt. Take a look at the areas and missing connections before routing.');
+      else if (job?.id === previousJob.id && job.state === 'ready') toast('Copper rebuilt. Take a look at the areas and missing connections before routing.');
+      else toast('Copper changes cancelled. Your previous copper and result are still here.');
     }
     if (previousJob?.state === 'clearing' && job?.state !== 'clearing') {
       if (job?.id === previousJob.id && job.state === 'ready' && job.routingCleared) {
@@ -793,9 +795,11 @@
       dismissedStopJobId = viewedStopJobId = announcedStopJobId = announcedExportJobId = downloadedSesJobId = downloadedDsnJobId = downloadedCopperJobId = null;
       remainingRenderKey = '';
       boardKey = '';
-      board = null;
-      visibleLayers.clear();
-      layerRenderKey = '';
+      if (job.state !== 'updating_copper' && previousJob?.state !== 'updating_copper') {
+        board = null;
+        visibleLayers.clear();
+        layerRenderKey = '';
+      }
       $('emptyBoard').hidden = true;
       draw();
     }
@@ -1392,6 +1396,23 @@
 
   function selectedCopperZone() { return copperDrafts.find(zone => zone.id === selectedCopperId) || null; }
 
+  function updateCopperWork() {
+    const job = activityJob(), pending = job?.state === 'updating_copper' ? job.copperUpdate : null;
+    $('copperWork').hidden = !pending; $('copperWorkBanner').hidden = !pending;
+    if (!pending) return;
+    const count = pending.zoneCount;
+    const title = Number.isFinite(count) ? `Applying ${number(count)} copper ${count === 1 ? 'area' : 'areas'}…` : 'Applying copper fills…';
+    $('copperWorkTitle').textContent = title;
+    let detail = pending.message || 'Preparing your copper changes…';
+    if (pending.phase === 'copper_fill' && Number.isFinite(pending.processed) && Number.isFinite(pending.total)) detail = `${number(pending.processed)} / ${number(pending.total)} areas filled · ${detail}`;
+    $('copperWorkDetail').textContent = detail;
+    $('copperWorkBannerDetail').textContent = `${title} ${detail}`;
+    const progress = $('copperWorkProgress');
+    if (pending.phase === 'copper_fill' && pending.total > 0 && Number.isFinite(pending.processed)) {
+      progress.max = pending.total; progress.value = Math.min(pending.total, Math.max(0, pending.processed));
+    } else progress.removeAttribute('value');
+  }
+
   function updateCopperControls(available, active, previousRulesPending) {
     const job = currentState?.job;
     const hasBoard = Boolean(job && job.state !== 'idle');
@@ -1400,13 +1421,15 @@
     const summary = job?.copperSummary;
     const count = summary?.zoneCount ?? board?.copperZones?.length ?? 0;
     const copperNets = summary?.netNames?.slice(0, 3).join(', ');
-    $('copperSummary').textContent = count ? `${number(count)} temporary copper ${count === 1 ? 'area' : 'areas'}${copperNets ? ' · ' + copperNets : ''}` : 'Add copper and choose the net it connects to.';
+    $('copperSummary').textContent = count ? `${number(count)} ${job?.state === 'updating_copper' ? 'current' : 'temporary'} copper ${count === 1 ? 'area' : 'areas'}${copperNets ? ' · ' + copperNets : ''}` : (job?.state === 'updating_copper' ? 'No current copper areas. Your changes are being checked.' : 'Add copper and choose the net it connects to.');
+    updateCopperWork();
     $('copperExportNote').hidden = !count;
     $('downloadCopper').hidden = !count;
     $('downloadCopper').disabled = !connected || active || busy || !count;
     updateCopperChoiceDialogs();
-    for (const control of $('copperDialog').querySelectorAll('button,input,select')) control.disabled = busy || copperApplying;
-    if (!busy && !copperApplying && selectedCopperZone()) updateCopperDependentFields(selectedCopperZone());
+    for (const control of $('copperDialog').querySelectorAll('button,input,select')) control.disabled = busy || copperApplying || active;
+    if (!busy && !copperApplying && !active && selectedCopperZone()) updateCopperDependentFields(selectedCopperZone());
+    $('copyCopperZone').disabled ||= !selectedCopperZone() || copperDrafts.length >= 64;
     if ($('copperDialog').open && ((copperData?.jobId && job?.id !== copperData.jobId) || active) && !copperApplying) discardCopperDraft();
     if (copperDrawing && ((copperData?.jobId && job?.id !== copperData.jobId) || active)) discardCopperDraft();
   }
@@ -1453,7 +1476,7 @@
       await post('/api/copper-zones/import', { jobId, settings, routingSettings: getSettings() });
       if ($('copperDialog').open) $('copperDialog').close();
       if ($('copperLoadDialog').open) $('copperLoadDialog').close();
-      toast('Copper settings loaded. Rebuilding the areas and checking their connections…');
+      if (currentState?.job?.state === 'updating_copper') toast('Building the saved copper areas and checking their connections…');
     } catch (error) { if ($('copperDialog').open) copperError(error.message); else toast(error.message, true); }
     finally { busy = false; $('copperSettingsFileInput').value = ''; updateControls(); }
   }
@@ -1523,6 +1546,20 @@
     } catch (error) { copperError(error.message); }
   }
 
+  function copyCopperArea() {
+    if (!copperData || busy || copperDrawing || isActive() || currentState?.job?.id !== copperData.jobId) return;
+    if (copperDrafts.length >= 64) { copperError('This board already has the maximum of 64 copper areas. Edit or delete an existing area.'); return; }
+    readCopperEditor();
+    const source = selectedCopperZone(); if (!source) return;
+    const copy = structuredClone(source), ids = new Set(copperDrafts.map(zone => zone.id));
+    do { copy.id = `zone-${globalThis.crypto?.randomUUID?.() || Date.now() + '-' + Math.random().toString(16).slice(2)}`; } while (ids.has(copy.id));
+    const names = new Set(copperDrafts.map(zone => zone.name));
+    let number = 1;
+    do { const suffix = number === 1 ? ' copy' : ` copy ${number}`; copy.name = (source.name || 'Copper area').slice(0, 100 - suffix.length) + suffix; number++; } while (names.has(copy.name));
+    copperDrafts.push(copy); selectedCopperId = copy.id; copperError(); renderCopperDraft(); updateControls();
+    $('copperName').focus(); $('copperName').select();
+  }
+
   const copperNumberFields = { clearance: 'copperClearance', edgeClearance: 'copperEdgeClearance', thermalGap: 'copperThermalGap', spokeWidth: 'copperSpokeWidth', gridPitch: 'copperGridPitch', gridWidth: 'copperGridWidth' };
 
   function readCopperEditor() {
@@ -1565,7 +1602,8 @@
     renderCopperList();
     const zone = selectedCopperZone();
     $('copperEditor').hidden = !zone; $('copperEmpty').hidden = Boolean(zone);
-    $('applyCopper').disabled = busy || copperApplying;
+    $('applyCopper').disabled = busy || copperApplying || isActive();
+    $('copyCopperZone').disabled = busy || copperApplying || isActive() || !zone || copperDrafts.length >= 64;
     if (!zone) return;
     $('copperName').value = zone.name || '';
     $('copperLayer').value = String(zone.layer); $('copperNet').value = String(zone.net);
@@ -1623,7 +1661,7 @@
       const result = await post('/api/copper-zones', { jobId: copperData.jobId, zones: copperDrafts, routingSettings: getSettings() });
       if (result?.copperError || result?.job?.copperError) throw new Error(result.copperError || result.job.copperError);
       $('copperDialog').close(); focusedCopperId = null; copperData = null; copperDrafts = []; selectedCopperId = null;
-      toast('Building copper fills and checking their connections…');
+      if (currentState?.job?.state === 'updating_copper') toast('Building copper fills and checking their connections…');
     } catch (error) { copperError(error.message); }
     finally { busy = copperApplying = false; $('applyCopper').textContent = 'Apply & rebuild'; updateControls(); }
   }
@@ -2326,6 +2364,7 @@
   $('applyCopper').addEventListener('click', () => void applyCopper());
   $('addWholeCopper').addEventListener('click', () => addCopperArea(false));
   $('addDrawnCopper').addEventListener('click', () => addCopperArea(true));
+  $('copyCopperZone').addEventListener('click', copyCopperArea);
   $('deleteCopperZone').addEventListener('click', () => { copperDrafts = copperDrafts.filter(zone => zone.id !== selectedCopperId); selectedCopperId = copperDrafts[0]?.id ?? null; copperError(); renderCopperDraft(); });
   $('redrawCopperBoundary').addEventListener('click', () => startCopperDrawing('boundary'));
   $('wholeCopperBoundary').addEventListener('click', () => { readCopperEditor(); const zone = selectedCopperZone(); if (zone) { try { zone.points = boardCopperBoundary(); copperError(); renderCopperDraft(); } catch (error) { copperError(error.message); } } });

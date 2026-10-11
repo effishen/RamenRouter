@@ -584,6 +584,16 @@ dialog p{font-size:16px;line-height:1.65}
 
 /* Copper areas are edited deliberately, with the actual rebuilt copper behind tracks. */
 .copper-setting>p{font-size:14px;line-height:1.6;color:#b1c6c4;margin:10px 0 0}
+.copper-work{margin-top:14px;padding:14px;border:1px solid #76b99e;border-radius:7px;background:#203c33;color:#d9f2e5}
+.copper-work>div{display:flex;gap:10px;align-items:center;font-size:16px;line-height:1.45}
+.copper-work .spinner,.copper-work-banner .spinner{flex-shrink:0;width:20px;height:20px}
+.copper-work>p{font-size:14px;line-height:1.55;margin:10px 0;overflow-wrap:anywhere}
+.copper-work>progress{width:100%;height:10px;accent-color:var(--teal);margin-bottom:9px}
+.copper-work>small{display:block;font-size:13px;line-height:1.55;color:#bddacc}
+.copper-work-banner{position:absolute;top:57px;left:20px;right:20px;z-index:4;display:flex;align-items:center;gap:13px;max-width:620px;padding:14px 17px;background:#1d3930ed;border:1px solid #73b497;border-radius:7px;box-shadow:0 8px 28px #0004;pointer-events:none}
+.copper-work-banner strong{display:block;font-size:17px;color:#d8f4e4}
+.copper-work-banner small{display:block;margin-top:5px;font-size:14px;line-height:1.5;color:#bcdbca;overflow-wrap:anywhere}
+.copper-editor-actions{display:flex;flex-wrap:wrap;gap:9px;justify-content:flex-end}
 .copper-dialog{width:1050px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);padding:25px 28px;overflow:auto;scrollbar-width:thin;scrollbar-color:#51776b #13232b}
 .copper-dialog h2{font-size:31px;margin:15px 0 10px;line-height:1.3}
 .copper-dialog h3{font-size:19px;font-weight:550;line-height:1.45;margin:0}

@@ -127,7 +127,7 @@ The latest board's net choices are remembered in this browser when local storage
 
 I don't want a long trace for every GND connection if a copper plane can do the job.
 
-Open **Copper fills** after loading your board. Use **Add whole-board fill** for a whole layer, or **Draw a copper area** to plot your own boundary. Pick the net and layer, such as GND on an inner layer. Add as many areas as you need, then edit or delete them later.
+Open **Copper fills** after loading your board. Use **Add whole-board fill** for a whole layer, or **Draw a copper area** to plot your own boundary. Pick the net and layer, such as GND on the bottom layer. Add as many areas as you need, then edit or delete them later. To reuse a shape on another layer, select it and choose **Copy area**. The copy keeps the boundary, cutouts and settings; edit it before applying.
 
 These are temporary areas used while routing in RamenRouter. Set up matching copper pours in your PCB editor for the actual board: the same net, layer, boundaries and connection settings.
 
@@ -147,7 +147,9 @@ Click to place each boundary point. Choose **Finish shape**, press Enter or clic
 
 Use **Draw a cutout** wherever you want this area to stay clear. You can redraw or delete each cutout. Existing board keepouts are respected too.
 
-Choose **Apply & rebuild** to build the temporary fill and check its connections. The preview shows the filled result with its gaps and cutouts. The **Copper fills** checkbox only controls visibility.
+Choose **Apply & rebuild** to build the temporary fill and check its connections. The sidebar and board show the pending area count and progress while it works. Your previous copper stays visible until the new areas are ready. Choose **Cancel copper changes** to keep the previous board and result. Routing and copper-editing controls wait until it finishes or is cancelled.
+
+The preview shows the filled result with its gaps and cutouts. The **Copper fills** checkbox only controls visibility.
 
 A pad on another layer still needs a legal via or pad escape to reach the connected plane. An isolated bit of copper won't finish a connection.
 
