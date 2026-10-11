@@ -62,7 +62,7 @@ Check the cleared board, then click **Start routing** when you're ready.
 
 Open **Routing rules → Routing options**. **Apply rules** saves your changes; **Cancel** discards them.
 
-- **Smart search** gives difficult connections more attention and tries focused repairs when only a few remain. More **Routing attempts** gives it more chances. It keeps the best checked result along the way.
+- **Smart search** gives difficult connections more attention. When the board is nearly connected, it switches between focused repairs and fresh routing attempts. It can revisit useful layouts that solved different connections. More **Routing attempts** gives it more chances. The best checked result stays available along the way.
 - **Ramen SMD escape** prepares extra short connections from surface-mount pads to nearby vias before routing. Connections needed to reach a net's chosen main layers are tried automatically, even with this switch off.
 - **Optimize after routing** refines the routes and tries to reduce vias.
 - **Prefer alternating layer directions** encourages vertical traces on the top layer, horizontal on the next, and alternating directions through the stack. The dialog shows the preference for each layer. It's off by default, can bend where needed, and has no effect on single-layer boards.

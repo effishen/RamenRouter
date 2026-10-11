@@ -29,7 +29,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.3</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.4</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
     <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
@@ -155,7 +155,7 @@
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
       <p id="copperExportNote" class="copper-export-note" hidden>These fills help route your board here. They stay here: DSN keeps your file's original copper, and SES carries tracks and vias. Refill matching copper pours in your PCB editor and check the connections.</p>
       <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.3</span><span>Made to fit · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.4</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -201,7 +201,7 @@
           <label class="checkbox-row fanout-only" id="fanoutOnlyRow" hidden><input type="checkbox" id="fanoutOnly" name="fanoutOnly"><span>Pad escapes only · skip routing</span></label>
         </div>
         <div class="setting-block optimize-setting"><label class="switch-row" for="optimize"><span><strong>Optimize after routing</strong></span><span class="switch"><input type="checkbox" id="optimize" name="optimize" checked><span class="switch-track"></span></span></label><p>Tidy up completed routes and try to use fewer vias.</p></div>
-        <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Give tricky nets another go and try to untangle the last few connections. Keep the best checked result along the way.</p></div>
+        <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Try fresh routing orders and repair the last few connections. Keep useful layouts to revisit, and keep the best checked result along the way.</p></div>
         <div class="setting-block direction-setting"><label class="switch-row" for="preferredDirections"><span><strong>Prefer alternating layer directions</strong></span><span class="switch"><input type="checkbox" id="preferredDirections" name="preferredDirections"><span class="switch-track"></span></span></label><p>Prefer vertical routes on one layer and horizontal on the next. Routes can still bend when needed. Think of it as a preference, not a hard rule.</p><p id="directionLayerPreview" class="direction-layer-preview"></p></div>
         <div class="setting-block benchmark-setting"><label class="switch-row" for="benchmarkMode"><span><strong>Fixed-work benchmark</strong></span><span class="switch"><input type="checkbox" id="benchmarkMode" name="benchmarkMode"><span class="switch-track"></span></span></label><p>Give difficult fanout searches the same work budget on each computer for a fairer comparison. Use the same board and rules on both. If time runs out, extend the run until it finishes.</p></div>
         <details class="advanced-rules"><summary>Advanced rules <span>1 OPTION</span></summary>
