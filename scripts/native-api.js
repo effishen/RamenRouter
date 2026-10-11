@@ -154,10 +154,10 @@
     if(job.operation!=='run')watchdog=setTimeout(()=>{if(id===serial&&job&&active.has(job.state))stopWithBest('timed_out',"This step ran past its time limit and was stopped.");},timeLimit+30000);
   }
   function getSettings(value={}) {
-    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
+    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,viaInPad:false,preferredDirections:false,benchmarkMode:false,adaptiveSchedule:true,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
     // Layer-access-only preparation is derived by the router, never an external setting.
     delete s.layerAccessOnly;
-    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
+    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','viaInPad','preferredDirections','benchmarkMode','adaptiveSchedule']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
     for(const [k,min,max] of [['maxPasses',1,100],['timeoutMinutes',1,1440]]) {
       if(!Number.isFinite(s[k])||!Number.isInteger(s[k])||s[k]<min||s[k]>max) throw new Error(k+" needs a whole number between "+min+' and '+max+'.');
     }

@@ -37,7 +37,15 @@ function createRamenGeometry(onActivity=null) {
     const dx=b[0]-a[0],dy=b[1]-a[1],den=dx*dx+dy*dy,t=den?Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/den)):0;
     return Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy);
   }
-  function pointOnSegment(p, a, b) { return distancePointSegment(p[0],p[1],a,b) <= EPS; }
+  function pointOnSegment(p, a, b) {
+    // A boundary hit must lie inside the segment's bounds. Reject far-away
+    // polygon edges before projecting and taking a square root; a pour can
+    // contain thousands of edges. Keep a generous rounding margin so large
+    // coordinates retain the existing distance calculation near a boundary.
+    const margin=EPS+64*Number.EPSILON*Math.max(1,Math.abs(p[0]),Math.abs(p[1]),Math.abs(a[0]),Math.abs(a[1]),Math.abs(b[0]),Math.abs(b[1]));
+    if(p[0]<Math.min(a[0],b[0])-margin||p[0]>Math.max(a[0],b[0])+margin||p[1]<Math.min(a[1],b[1])-margin||p[1]>Math.max(a[1],b[1])+margin)return false;
+    return distancePointSegment(p[0],p[1],a,b)<=EPS;
+  }
   function segmentIntersection(a, b, c, d) {
     const abC = cross(a,b,c), abD = cross(a,b,d), cdA = cross(c,d,a), cdB = cross(c,d,b);
     if (((abC > EPS && abD < -EPS) || (abC < -EPS && abD > EPS)) &&
