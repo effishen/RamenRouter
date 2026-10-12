@@ -46,7 +46,7 @@ Keep all the files together. Once you've downloaded the app, you don't need an i
 
 Scroll to zoom, drag to pan, and press **F** to fit the board. **Visible layers** lets you show or hide layers. **Airwires** are guide lines for connections that still need routing; they aren't copper traces.
 
-The job overview shows **Attempt #**, **Time left**, **Refinement** and **Finishing repairs**, including how many rounds are still available. Those are limits, so a run can finish before using them all. The time shown is the remaining job budget, rather than a prediction of when your board will be done.
+The job overview shows **Attempt #**, **Time left**, **Refinement** and **Finishing repairs**, including how many rounds are still available. Those are limits, so a run can finish before using them all. The time shown is the remaining job budget, rather than a prediction of when your board will be done. It stays still while routing is paused for your decision and resumes when you continue.
 
 The activity line and log explain what RamenRouter is working on. **Live work** highlights the pads, vias, search paths and checks happening on the board. Trial paths are shown separately from completed tracks. The preview shows a sample of the work, so you won't see every search. Turn it off if you prefer a quiet display. Reduced-motion settings keep the highlights still.
 

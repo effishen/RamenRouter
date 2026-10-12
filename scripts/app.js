@@ -797,7 +797,7 @@
       $(name + 'Progress').dataset.status = display.status;
     }
     let left = null;
-    if (running && Number.isFinite(job.deadlineAt)) left = Math.max(0, (job.deadlineAt - Date.now()) / 1000);
+    if (running && Number.isFinite(job.deadlineAt)) left = Math.max(0, (job.deadlineAt - (Number.isFinite(job.pausedAt) ? job.pausedAt : Date.now())) / 1000);
     else if (Number.isFinite(job.remainingSeconds)) left = Math.max(0, job.remainingSeconds);
     else if (Number.isFinite(job.deadlineAt) && Number.isFinite(job.endedAt)) left = Math.max(0, (job.deadlineAt - job.endedAt) / 1000);
     progressText('timeLeftValue', left === null ? '—' : seconds(Math.ceil(left)));
