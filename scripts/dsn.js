@@ -44,7 +44,56 @@ function createRamenDSN() {
     const shorterNets=nets.filter(net=>net.preferShort===true).map(net=>net.name);
     return shorterNets.length?'; RamenRouter routing rules v1: '+JSON.stringify({shorterNets})+'\n':'';
   }
-  function boardMetadataWrite(board,nets=board.nets){return routingRulesWrite(nets);}
+  const scaleProfiles=new Set(['auto','declared','easyeda-standard']);
+  function boardScaleRead(text) {
+    let i=0,record=null;
+    while(i<text.length) {
+      if(/\s/.test(text[i])){i++;continue;}
+      if(text[i]!==';'&&!(text[i]==='#'&&(i===0||text[i-1]==='\n')))break;
+      const start=++i;while(i<text.length&&text[i]!=='\n')i++;
+      const comment=text.slice(start,i).trim();
+      if(!comment.startsWith('RamenRouter board scale'))continue;
+      if(record!==null)fail('This file has more than one saved board-scale choice.');
+      const prefix='RamenRouter board scale v1:';
+      if(!comment.startsWith(prefix))fail('This version of the saved board scale is not supported. Try a newer RamenRouter.');
+      try{record=JSON.parse(comment.slice(prefix.length));}catch(_){fail('The saved board scale is damaged. Try exporting the board again.');}
+      if(!record||typeof record!=='object'||Array.isArray(record)||Object.keys(record).length!==1||!scaleProfiles.has(record.profile))fail('The saved board-scale choice is invalid. Choose Automatic, DSN units or EasyEDA Standard.');
+    }
+    return record;
+  }
+  function detectBoardScale(ast,board) {
+    if(board.units.name!=='mil')return {profile:'declared',source:'file-units',reason:'Using the units declared in this file.'};
+    const parser=first(ast,'parser'),host=String(first(parser,'host_cad')?.[1]||'').trim();
+    // Pro exports and ordinary Specctra files keep their declared unit scale.
+    // Only Standard's known legacy flattened layout uses 10-mil coordinates.
+    if(/easyeda/i.test(host)&&/pro/i.test(host))return {profile:'declared',source:'file-units',reason:'Using the units declared by EasyEDA Pro.'};
+    if(/^easyeda\s*(?:standard|std|\(standard\)|\(std\))$/i.test(host))return {profile:'easyeda-standard',source:'host-cad',reason:'EasyEDA Standard export: one coordinate unit is 10 mil.'};
+    const library=first(ast,'library'),images=children(library,'image'),components=children(first(ast,'placement'),'component'),layers=board.layers.map(layer=>layer.name);
+    const expected=['1',...Array.from({length:Math.max(0,layers.length-2)},(_,i)=>String(21+i)),'2'];
+    const image=images[0],pins=children(image,'pin'),places=children(components[0],'place'),padNames=children(library,'padstack').map(pad=>String(pad[1]));
+    const legacy=board.units.resolution===1000&&layers.length>=2&&layers.length<=18&&layers.every((name,i)=>name===expected[i])&&
+      images.length===1&&image[1]==='u1'&&components.length===1&&components[0][1]==='u1'&&places.length===1&&places[0][1]==='u1'&&
+      atoms(places[0]).length===6&&n(places[0][2])===0&&n(places[0][3])===0&&places[0][4]==='front'&&n(places[0][5])===0&&
+      pins.length>0&&pins.every(pin=>/^p\d+$/.test(String(pin[1]))&&/^\d+$/.test(String(pin[2])))&&
+      padNames.length>0&&padNames.every(name=>/^p\d+$/.test(name)||/^via\d+$/.test(name))&&board.viaDefs.length>0&&board.viaDefs.every(def=>/^via\d+$/.test(def.name))&&
+      board.nets.every(net=>net.pins.every(pin=>/^u1-\d+$/.test(String(pin))));
+    return legacy||/^easyeda$/i.test(host)?{profile:'easyeda-standard',source:'legacy-layout',reason:'This could be an EasyEDA Standard export. Check its board size before choosing that scale.'}:{profile:'declared',source:'file-units',reason:'Using the units declared in this file.'};
+  }
+  function applyBoardScale(board,selectedProfile='auto') {
+    if(!scaleProfiles.has(selectedProfile))throw new Error('Choose Automatic, DSN units or EasyEDA Standard for this board.');
+    if(selectedProfile==='easyeda-standard'&&board.units.name!=='mil')throw new Error('EasyEDA Standard scale needs a file declared in mil. Choose DSN units for this board.');
+    const declaredMmPerUnit={mm:1,mil:.0254,inch:25.4,um:.001,cm:10}[board.units.name];
+    const detected=detectBoardScale(board._ast,board),autoProfile=detected.source==='legacy-layout'?'declared':detected.profile,profile=selectedProfile==='auto'?autoProfile:selectedProfile;
+    const mmPerUnit=profile==='easyeda-standard'?.254:declaredMmPerUnit;
+    board.units.mmPerUnit=mmPerUnit;
+    board.boardScale={selectedProfile,detectedProfile:detected.profile,autoProfile,profile,effectiveProfile:profile,mmPerUnit,declaredMmPerUnit,canUseEasyedaStandard:board.units.name==='mil',
+      source:selectedProfile==='auto'?detected.source:'user-choice',reason:selectedProfile==='auto'?(detected.source==='legacy-layout'?'This looks like an EasyEDA Standard export. Choose that scale if the board size matches your editor.':detected.reason):profile==='easyeda-standard'?'Using EasyEDA Standard 10-mil coordinates for this board.':'Using the units declared in this file.',
+      widthMm:(board.bounds.maxX-board.bounds.minX)*mmPerUnit,heightMm:(board.bounds.maxY-board.bounds.minY)*mmPerUnit,
+      minViaDiameterMm:board.viaDefs.length?Math.min(...board.viaDefs.map(def=>def.diameter))*mmPerUnit:null,
+      viaDiametersMm:board.viaDefs.map(def=>({name:def.name,diameterMm:def.diameter*mmPerUnit}))};
+    return board;
+  }
+  function boardMetadataWrite(board,nets=board.nets){return routingRulesWrite(nets)+(board.boardScale?.selectedProfile&&board.boardScale.selectedProfile!=='auto'?'; RamenRouter board scale v1: '+JSON.stringify({profile:board.boardScale.selectedProfile})+'\n':'');}
   function astRead(text) {
     if (typeof text !== 'string' || !text.trim()) fail('This file is empty. Choose a DSN exported from your PCB editor.');
     if (text.length > 64 * 1024 * 1024) fail('This file is too large. Choose a DSN no larger than 64 MiB.');
@@ -147,7 +196,7 @@ function createRamenDSN() {
   }
   function parse(text, filename = 'board.dsn') {
     const ast = astRead(text);
-    const routingRules = routingRulesRead(text);
+    const routingRules = routingRulesRead(text),scaleChoice=boardScaleRead(text);
     allowed(ast, ['parser','resolution','unit','structure','placement','library','network','wiring'], 'the design');
     const parser = first(ast, 'parser'), quote = first(parser, 'string_quote');
     if (quote && quote[1] !== '"') fail('This DSN needs standard double quotes around quoted names. Try exporting it again.');
@@ -506,7 +555,7 @@ function createRamenDSN() {
       }
     }
     if(/^\s*;\s*RamenRouter copper fills/m.test(text))board.warnings.push("Saved copper-area settings are no longer used. Physical copper already in this DSN has been kept.");
-    return board;
+    return applyBoardScale(board,scaleChoice?.profile||'auto');
   }
   function atomWrite(value) {
     const s = String(value);
@@ -580,6 +629,12 @@ function createRamenDSN() {
     return boardMetadataWrite(board,nets)+astWrite(ast)+'\n';
   }
   function setNetRoutingLayers(board, changes) {return setNetRoutingRules(board,changes);}
+  function setBoardScale(board,profile) {
+    const scaled=applyBoardScale({...board,units:{...board.units}},profile);
+    // Write current checked tracks and vias, not just the original import's AST.
+    // The saved choice changes measurements only; all CAD numbers stay native.
+    return exportDsn(scaled,board.filename||board.name||'board.dsn');
+  }
   function copperWiresWrite(board){
     if(!Array.isArray(board.copperFills||[])||(board.copperFills||[]).length>100000)throw new Error('Export stopped because the imported copper list is invalid or too large.');
     const out=[];
@@ -760,10 +815,10 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.3.7']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.3.8']],library,network]];
     return astWrite(session)+'\n';
   }
-  return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, exportRoutedDsn };
+  return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, setBoardScale, exportRoutedDsn };
 }
 if (typeof globalThis !== 'undefined') globalThis.createRamenDSN = createRamenDSN;
 if (typeof module !== 'undefined' && module.exports) module.exports = { createRamenDSN };

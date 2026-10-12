@@ -585,5 +585,31 @@ dialog p{font-size:16px;line-height:1.65}
 .view-options{flex-wrap:wrap;row-gap:10px}
 .via-preview-note{margin:12px 0 0;font-size:13px;line-height:1.6;color:#91aab5}
 
+.board-scale-setting{margin:12px 0 0}
+.board-scale-button{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:43px;padding:10px 12px;background:#172b31;border:1px solid #39585e;border-radius:5px;color:#c5dcd7;font-size:15px;text-align:left}
+.board-scale-button>span{color:#90b8ab;font-size:22px;line-height:1}
+.board-scale-setting p{margin:7px 2px 0;font-size:13px;line-height:1.6;color:#9db7bc;overflow-wrap:anywhere}
+.board-scale-setting .board-scale-hint{color:#dbbc91}
+.board-scale-dialog{width:550px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow:auto;padding:24px 28px}
+.board-scale-dialog h2{font-size:28px;line-height:1.35;margin:17px 0 12px}
+.board-scale-dialog p{font-size:16px;line-height:1.6;margin:12px 0}
+.board-scale-choices{border:0;padding:0;margin:22px 0 17px}
+.board-scale-choices>legend{font-size:14px;color:#aac5c8;margin-bottom:10px}
+.board-scale-choices>label{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;margin:8px 0;border:1px solid #3d5d64;border-radius:6px;background:#183039;cursor:pointer}
+.board-scale-choices input{accent-color:var(--teal);width:17px;height:17px;flex-shrink:0;margin:3px 0 0}
+.board-scale-choices strong{display:block;font-size:16px;font-weight:550;color:#d8e9e5;line-height:1.5}
+.board-scale-choices small{display:block;font-size:14px;line-height:1.55;color:#a6c0c5;margin-top:3px}
+.board-scale-choices>label:has(input:checked){border-color:#7bb69f;background:#224139}
+.board-scale-choices>label.unavailable{opacity:.5;cursor:not-allowed}
+.board-scale-sizes{margin:19px 0;padding:14px 16px;background:#101f27;border:1px solid #37535e;border-radius:6px}
+.board-scale-sizes>div{display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:8px 0;font-size:15px;line-height:1.55}
+.board-scale-sizes dt{color:#a9c2c6}
+.board-scale-sizes dd{margin:0;color:#d8ece3;text-align:right;font:15px/1.55 var(--mono);overflow-wrap:anywhere}
+.board-scale-dialog .board-scale-note{font-size:14px;color:#aac3c6}
+.board-scale-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:23px}
+.board-scale-actions button{min-height:46px;padding:11px 15px;border:1px solid #55776f;border-radius:6px;background:#203b34;color:#d5e9e0;font-size:16px;line-height:1.45}
+.board-scale-actions button:last-child{background:var(--teal);border-color:#8ce9cd;color:#10382d;font-weight:600}
+@media(max-width:600px){.board-scale-dialog{max-width:calc(100vw - 20px);max-height:calc(100dvh - 20px);padding:19px}.board-scale-dialog h2{font-size:25px}.board-scale-sizes>div{flex-direction:column;gap:4px}.board-scale-sizes dd{text-align:left}.board-scale-actions{flex-direction:column-reverse}.board-scale-actions button{width:100%}}
+
 .secondary-downloads>button.export-ready,.run-report-button.export-ready{padding:8px 11px;border:1px solid #a5d9ae;border-radius:5px;background:#253d31;color:#d8f5e4;box-shadow:0 0 0 2px #9bd3a72e;animation:action-attention 2.1s ease-in-out 4}
 @media(prefers-reduced-motion:reduce){.secondary-downloads>button.export-ready,.run-report-button.export-ready{animation:none!important;box-shadow:0 0 0 2px #a5d99940}}

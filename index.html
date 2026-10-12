@@ -27,7 +27,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.7</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.8</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
     <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
@@ -46,6 +46,7 @@
         <span class="format-tag">YOUR DSN FILE</span>
       </button>
       <div id="fileCard" class="file-card" hidden><div class="file-symbol">DSN</div><div class="file-copy"><strong id="fileName"></strong><span id="fileDetail">Board loaded</span></div><button class="icon-button" id="replaceButton" title="Choose another board" aria-label="Choose another board">↻</button></div>
+      <div class="board-scale-setting" id="boardScaleSetting" hidden><button class="board-scale-button" id="boardScaleButton" type="button" aria-haspopup="dialog" disabled>Board scale <span aria-hidden="true">›</span></button><p id="boardScaleSummary">Checking board sizes…</p><p id="boardScaleHint" class="board-scale-hint" hidden>Board size looks wrong? Check Board scale.</p></div>
       <button class="clear-routing-button" id="clearRoutingButton" type="button" hidden disabled>Clear routing &amp; start over</button>
       <button class="text-button demo-button" id="demoButton">Try the included example <span aria-hidden="true">↗</span></button>
 
@@ -140,7 +141,7 @@
       <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Routing log <span aria-hidden="true">↓</span></button></div>
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
       <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.7</span><span>Made to fit · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.8</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -212,6 +213,20 @@
     <p class="net-layers-apply-note" id="netLayersApplyNote">Routing options apply to your next run. Your current result stays available.</p>
     <p id="routingRulesError" class="net-layer-validation" role="alert" hidden></p>
     <div class="net-layer-actions"><button id="cancelNetLayers" type="button">Cancel</button><button id="applyNetLayers" type="button" disabled>Apply rules</button></div>
+  </dialog>
+  <dialog id="boardScaleDialog" class="board-scale-dialog" aria-labelledby="boardScaleTitle" aria-describedby="boardScaleDescription boardScalePreserved">
+    <div class="dialog-header"><span class="section-kicker">CHECK YOUR SIZES</span><button id="closeBoardScale" class="icon-button" type="button" aria-label="Close board scale">×</button></div>
+    <h2 id="boardScaleTitle">Does the size look right?</h2>
+    <p id="boardScaleDescription">Compare these sizes with your PCB editor. If they look wrong, choose the scale that matches your export.</p>
+    <fieldset class="board-scale-choices"><legend>Board scale</legend>
+      <label><input id="boardScaleAuto" type="radio" name="boardScaleProfile" value="auto"><span><strong>Automatic</strong><small id="boardScaleAutoDetail">Use the file's units, or a clearly recognised export scale.</small></span></label>
+      <label><input id="boardScaleEasyeda" type="radio" name="boardScaleProfile" value="easyeda-standard"><span><strong>EasyEDA Standard</strong><small>Use EasyEDA Standard's export scale.</small></span></label>
+      <label><input id="boardScaleDeclared" type="radio" name="boardScaleProfile" value="declared"><span><strong>DSN units</strong><small>Use the sizes declared in the file.</small></span></label>
+    </fieldset>
+    <dl class="board-scale-sizes" aria-live="polite"><div><dt>Board size</dt><dd id="boardScaleDimensions">—</dd></div><div><dt>Via copper diameter</dt><dd id="boardScaleViaDiameters">—</dd></div></dl>
+    <p id="boardScalePreserved" class="board-scale-note">Board scale updates the measurements. Your routes and the coordinates sent back to your PCB editor stay the same.</p>
+    <p class="board-scale-note">This choice belongs to this board. A DSN saved from RamenRouter keeps it for next time.</p>
+    <div class="board-scale-actions"><button id="cancelBoardScale" type="button">Cancel</button><button id="applyBoardScale" type="button">Apply scale</button></div>
   </dialog>
   <dialog id="clearRoutingDialog" class="clear-routing-dialog" aria-labelledby="clearRoutingTitle" aria-describedby="clearRoutingDescription clearRoutingFixed clearRoutingPreserved">
     <div class="dialog-header"><span class="section-kicker">START FRESH</span><button id="closeClearRouting" class="icon-button" type="button" aria-label="Cancel clearing routing">×</button></div>

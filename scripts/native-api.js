@@ -1,7 +1,7 @@
 /* RamenRouter browser host. GPL-3.0-or-later. No server, runtime or network. */
 'use strict';
 (() => {
-  const active = new Set(['inspecting','starting','running','pausing','paused','stopping','clearing','updating_rules']);
+  const active = new Set(['inspecting','starting','running','pausing','paused','stopping','clearing','updating_rules','updating_scale']);
   const subscribers = new Set(), activitySubscribers = new Set();
   const benchmark=createRamenBenchmark();
   const hostGeometry=createRamenGeometry(),ruleMemory=createRamenRuleMemory();
@@ -10,9 +10,9 @@
   let benchmarkEnvironment={animationEnabled:true};
   let activitySequence=0;
   let job = null, worker = null, workerUrl = null, inputText = null;
-  let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
+  let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, scaleTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.3.7',engineVersion:'Ramen JS 0.3.7',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.3.8',engineVersion:'Ramen JS 0.3.8',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
     const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
@@ -56,6 +56,7 @@
   }
   function updateLayerRules() {
     if(!job||!board)return;
+    job.boardScale=board.boardScale?structuredClone(board.boardScale):null;
     const settings=netLayerSettings(board),nets=new Map(settings.nets.map(net=>[net.id,net])),rawNets=new Map(board.nets.map(net=>[net.id,net]));
     const same=(a,b)=>a.length===b.length&&a.every(layer=>b.includes(layer));
     job.layerRulesChanged=settings.nets.some(net=>!same(net.allowedLayers,net.importedLayers)||net.preferShort!==net.importedPreferShort);
@@ -98,6 +99,15 @@
     }
     log(message);notify();return state();
   }
+  function restoreBeforeScale(message,error=null) {
+    kill();
+    const saved=scaleTransaction;scaleTransaction=null;
+    if(saved) {
+      job={...saved.job,scaleError:error};board=saved.board;preview=saved.preview;
+      exports=saved.exports;bestChecked=saved.bestChecked;inputText=saved.inputText;pendingRuleReuse=saved.pendingRuleReuse||null;
+    }
+    log(message);notify();return state();
+  }
   function freezeRunReport(status) {
     if(job?.operation!=='run'||!job.runReport)return;
     const retained=benchmark.cleanStats(bestChecked?.stats),report=job.runReport;
@@ -107,6 +117,7 @@
     job.runReport={...report,status,final:retained,complete:benchmark.completeStats(retained),progress,timing:{...report.timing,pausedMs},coverage:{partial:true},environment:{...report.environment,...job.benchmarkEnvironment}};
   }
   function stopWithBest(reason,message) {
+    if(scaleTransaction)return restoreBeforeScale(message+" Board scale kept. Your previous board is unchanged.");
     if(clearTransaction)return restoreBeforeClear(message+" Routing kept. Your previous board is unchanged.");
     if(ruleTransaction)return restoreBeforeRules(message+" Routing rules kept. Your previous board is unchanged.");
     freezeRunReport(reason);kill();job.stopReason=reason;job.state=reason;job.phase=reason;job.endedAt=Date.now();job.suggestions={};
@@ -247,7 +258,7 @@
         pads.push(item);
       }
       const air=(connection||geo.connectivity(b)).airwires||[];
-      return {units:'mm',bounds:[b.bounds.minX*s,b.bounds.minY*s,b.bounds.maxX*s,b.bounds.maxY*s],
+      return {units:'mm',boardScale:b.boardScale,bounds:[b.bounds.minX*s,b.bounds.minY*s,b.bounds.maxX*s,b.bounds.maxY*s],
         layers:b.layers.map(l=>({id:l.index,name:l.name,signal:true})),
         traces:(b.traces||[]).map(t=>({layer:t.layer,width:t.width*s,points:t.points.map(p),net:name(t.net)})),pads,
         vias:(b.vias||[]).map(v=>({x:v.x*s,y:v.y*s,radius:v.diameter*s/2,net:name(v.net),fromLayer:Math.min(...v.layers),toLayer:Math.max(...v.layers)})),
@@ -271,18 +282,18 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.3.7',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.3.8',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
       if(m.type==='stop') {cancelled=true;pauseResolve?.();pauseResolve=null;return;}
       if(m.type==='pause-budget'){if(managedBudget&&m.generation===budgetGeneration)pauseRequested=true;return;}
       if(m.type==='extend-budget'){resumeBudget(m);return;}
-      if(!['inspect','run','clear','layer-rules'].includes(m.type)) return;
+      if(!['inspect','run','clear','layer-rules','board-scale'].includes(m.type)) return;
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
-        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.7',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.7',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.8',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.8',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
         const b=measured('reading',()=>dsn.parse(m.text,m.name));measurement?.setNets(b.nets);
@@ -292,6 +303,20 @@
           b.viaInPadApplied=m.options.viaInPad;b.viaInPadOverride=m.options.viaInPad;
         }
         activityScale=b.units.mmPerUnit;activityNets=new Map(b.nets.map(net=>[net.id,net.name]));
+        if(m.type==='board-scale') {
+          if(!m.board||!m.board._ast||m.board.filename!==b.filename||m.board.originalText!==m.text)throw new Error('The checked board changed. Reopen Board scale and try again.');
+          stage('checking','Updating the board measurements. Your checked tracks and vias are kept.');
+          // A measurement edit keeps two distinct snapshots: the original
+          // routing input for Route again, and today's checked result for the
+          // preview/downloads. Never promote generated routes into the input.
+          const editedInput=dsn.setBoardScale(b,m.profile),calibratedInput=dsn.parse(editedInput,m.name);
+          const edited=dsn.parse(dsn.setBoardScale(m.board,m.profile),m.name);
+          edited.originalText=editedInput;edited._ast=calibratedInput._ast;
+          for(const key of ['viaInPadApplied','viaInPadOverride'])if(Object.prototype.hasOwnProperty.call(m.board,key))edited[key]=m.board[key];
+          activityScale=edited.units.mmPerUnit;activityNets=new Map(edited.nets.map(net=>[net.id,net.name]));
+          const finalStats=stats(edited),result=await checkedResult(edited,calibratedInput,m.options,m.name,finalStats,finalStats,false,false,null,true);
+          send({type:'scale-updated',editedInput,warnings:edited.warnings||[],...result});return;
+        }
         stage('checking','Loaded '+b.nets.length+' nets, '+b.pads.length+' pads and '+b.layers.length+" copper layers. Checking your board.");
         await yieldTask();
         if(m.type==='clear') {
@@ -374,16 +399,16 @@
     };
   }
   function launch(type,options,changes) {
-    const clearing=type==='clear',editingRules=type==='layer-rules',transactional=clearing||editingRules;
+    const clearing=type==='clear',editingRules=type==='layer-rules',editingScale=type==='board-scale',transactional=clearing||editingRules||editingScale;
     const saved=transactional?{job,board,preview,exports,bestChecked,inputText,pendingRuleReuse}:null;
     const ruleMatchFingerprint=type==='inspect'?null:job?.ruleMatchFingerprint||null;
     const routingCleared=!!job?.routingCleared,layerRulesChanged=!!job?.layerRulesChanged,layerRuleSummary=job?.layerRuleSummary||null;
     kill();
-    clearTransaction=clearing?saved:null;ruleTransaction=editingRules?saved:null;pendingRuleReuse=null;
+    clearTransaction=clearing?saved:null;ruleTransaction=editingRules?saved:null;scaleTransaction=editingScale?saved:null;pendingRuleReuse=null;
     if(!transactional) {exports=null;preview=null;board=null;bestChecked=null;}
     const id=++serial;
     const source='"use strict";\n'+[createRamenBenchmark,createRamenRuleMemory,createRamenDSN,createRamenGeometry,createRamenOptimizer,createRamenFanout,createRamenRouter,createRamenAdvisor,workerMain].map(fn=>fn.toString()).join('\n')+'\nworkerMain();';
-    job={id:String(id),name:job?.name||'board.dsn',state:clearing?'clearing':editingRules?'updating_rules':type==='inspect'?'inspecting':'starting',phase:clearing?'clearing':editingRules?'updating_rules':'loading',startedAt:Date.now(),settings:options,stats:transactional?saved.job.stats:null,initialStats:null,error:null,clearError:null,ruleError:null,hasOutput:false,routingCleared,layerRulesChanged,layerRuleSummary,routingSummary:transactional?routingSummary(board):null,suggestions:{},advice:{items:[]},bestResult:{available:false},revision:0,pass:0};
+    job={id:String(id),name:job?.name||'board.dsn',state:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':type==='inspect'?'inspecting':'starting',phase:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':'loading',startedAt:Date.now(),settings:options,stats:transactional?saved.job.stats:null,initialStats:null,error:null,clearError:null,ruleError:null,scaleError:null,boardScale:transactional?saved.board.boardScale:null,hasOutput:false,routingCleared,layerRulesChanged,layerRuleSummary,routingSummary:transactional?routingSummary(board):null,suggestions:{},advice:{items:[]},bestResult:{available:false},revision:0,pass:0};
     job.routingRulesChanged=layerRulesChanged;job.routingRuleSummary=layerRuleSummary;job.ruleMatchFingerprint=ruleMatchFingerprint;job.previousRulesProposal=null;
     job.operation=type;job.counters=null;job.runReport=null;
     job.benchmarkEnvironment={browser:String(globalThis.navigator?.userAgent||'Unknown browser').slice(0,160),userAgent:String(globalThis.navigator?.userAgent||'').slice(0,512),platform:String(globalThis.navigator?.platform||'').slice(0,160),hardwareConcurrency:globalThis.navigator?.hardwareConcurrency||null,workerCount:1,animationEnabled:typeof options.animationEnabled==='boolean'?options.animationEnabled:benchmarkEnvironment.animationEnabled,animationChanged:false};job.benchmarkEnvironment.initialAnimationEnabled=job.benchmarkEnvironment.animationEnabled;job.benchmarkPauseReceivedAt=null;
@@ -398,6 +423,7 @@
     } catch(error) {
       if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);
       if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);
+      if(editingScale)restoreBeforeScale("Couldn’t update board scale: "+error.message,error.message);
       throw error;
     }
     worker.onmessage=e=>{
@@ -420,6 +446,22 @@
       // Spatial updates are small and independent of logs, statistics and board previews.
       if(m.type==='activity'){if(m.phase&&!transactional)job.phase=m.phase;notifyActivity();return;}
       if(m.type==='progress'&&transactional){if(m.message&&m.log!==false)log(m.message);notify();return;}
+      if(editingScale) {
+        if(m.type==='error'){restoreBeforeScale("Couldn’t update board scale: "+m.error,m.error);return;}
+        if(m.type!=='scale-updated')return;
+        if(!m.board||!m.preview||!m.exports||!m.stats?.drcChecked||!m.stats?.widthRulesChecked||typeof m.editedInput!=='string'||m.board.traces.length!==saved.board.traces.length||m.board.vias.length!==saved.board.vias.length) {
+          restoreBeforeScale("Couldn’t update board scale: there wasn’t a checked result to use.","There wasn’t a checked result to use. Your previous board has been kept.");return;
+        }
+        board=m.board;preview=m.preview;exports=m.exports;inputText=m.editedInput;
+        job.stats=m.stats;job.initialStats=m.stats;job.routingSummary=routingSummary(board);updateLayerRules();
+        job.advice=m.advice||{items:[]};job.hasOutput=true;job.state='ready';job.phase='ready';job.endedAt=Date.now();job.revision++;
+        rememberChecked(m);scaleTransaction=null;kill();
+        // This is a measurement edit, not another timed routing run. A previous
+        // benchmark must not mix its old distances with the new physical scale.
+        job.runReport=null;log("Board scale updated. Your checked tracks and vias are kept. Measurements now use this board’s scale.");
+        for(const warning of m.warnings||[])log("Board note: "+warning);
+        notify();return;
+      }
       if(editingRules) {
         if(m.type==='error') {restoreBeforeRules("Couldn’t update routing rules: "+m.error,m.error);return;}
         if(m.type!=='rules-updated')return;
@@ -485,9 +527,9 @@
       if(m.type==='error') {freezeRunReport('error');if(['NET_LAYER_CONFLICT','VIA_IN_PAD_CONFLICT'].includes(m.code)&&bestChecked?.fromInput){board=bestChecked.board;preview=bestChecked.preview;exports=bestChecked.exports;job.stats={...bestChecked.stats};job.routingSummary=routingSummary(board);updateLayerRules();job.advice=bestChecked.advice;job.hasOutput=true;job.revision++;}job.state='error';job.phase='error';job.error=m.error;job.endedAt=Date.now();log('Error: '+m.error);if(m.stack)log(m.stack);kill();}
       notify();
     };
-    worker.onerror=e=>{if(id!==serial||!job||!active.has(job.state))return;const message=e.message||"Routing couldn’t start. Try the latest Chrome, Edge or Firefox.";if(clearing){restoreBeforeClear("Couldn’t clear routing: "+message,message);return;}if(editingRules){restoreBeforeRules("Couldn’t update routing rules: "+message,message);return;}freezeRunReport('error');job.error=message;job.state='error';job.phase='error';job.endedAt=Date.now();log(job.error);kill();notify();};
-    try {worker.postMessage({type,text:inputText,name:job.name,options,changes,environment:job.benchmarkEnvironment,deadlineAt:job.deadlineAt,budgetGeneration:job.budgetGeneration});}
-    catch(error) {if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);throw error;}
+    worker.onerror=e=>{if(id!==serial||!job||!active.has(job.state))return;const message=e.message||"Routing couldn’t start. Try the latest Chrome, Edge or Firefox.";if(clearing){restoreBeforeClear("Couldn’t clear routing: "+message,message);return;}if(editingRules){restoreBeforeRules("Couldn’t update routing rules: "+message,message);return;}if(editingScale){restoreBeforeScale("Couldn’t update board scale: "+message,message);return;}freezeRunReport('error');job.error=message;job.state='error';job.phase='error';job.endedAt=Date.now();log(job.error);kill();notify();};
+    try {worker.postMessage({type,text:inputText,name:job.name,options,changes,...(editingScale?{board:saved.board,profile:changes}:{}),environment:job.benchmarkEnvironment,deadlineAt:job.deadlineAt,budgetGeneration:job.budgetGeneration});}
+    catch(error) {if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);if(editingScale)restoreBeforeScale("Couldn’t update board scale: "+error.message,error.message);throw error;}
     armBudgetTimer(id);
     notify();return state();
   }
@@ -506,6 +548,19 @@
     if(endpoint==='/api/run-report'){if(!job?.runReport)throw new Error("There isn’t a run report yet.");return structuredClone(job.runReport);}
     if(endpoint==='/api/board'){if(!preview)throw new Error("The board preview is still loading.");return preview;}
     if(endpoint==='/api/raw'){if(!board)throw new Error("The board is still loading.");return structuredClone(board);}
+    if(endpoint==='/api/board-scale') {
+      const method=String(options.method||'GET').toUpperCase();
+      if(method==='GET'){if(!board||!job)throw new Error('Load a board before choosing its scale.');return {jobId:job.id,...structuredClone(board.boardScale)};}
+      if(method!=='POST')throw new Error('Board scale was not applied. Reopen Board scale and try again.');
+      requireIdle();requireRuleDecision();
+      if(!board||!job||!inputText)throw new Error('Load a board before choosing its scale.');
+      if(typeof data?.jobId!=='string'||data.jobId!==job.id)throw new Error('The board changed. Reopen Board scale and check its size again.');
+      if(!['auto','declared','easyeda-standard'].includes(data.profile))throw new Error('Choose Automatic, DSN units or EasyEDA Standard for this board.');
+      if(data.profile==='easyeda-standard'&&board.units.name!=='mil')throw new Error('EasyEDA Standard scale needs a file declared in mil. Choose DSN units for this board.');
+      if(data.profile===board.boardScale.selectedProfile)return state();
+      log('Updating the board measurements and keeping the current checked routing.');
+      return launch('board-scale',getSettings(job.settings),data.profile);
+    }
     if(endpoint==='/api/demo')return importText(globalThis.RAMEN_DEMO_DSN,'RamenRouter-demo.dsn');
     if(endpoint==='/api/upload') {
       let text;if(typeof data==='string')text=data;else if(data instanceof Blob)text=await data.text();else if(data instanceof ArrayBuffer||ArrayBuffer.isView(data))text=new TextDecoder().decode(data);else throw new Error('Choose a DSN file.');
@@ -591,7 +646,7 @@
       const type=params.get('type')||'ses',result=getDownload(type);
       return {blob:result.blob,disposition:'attachment; filename="'+result.filename+'"'};
     }
-    if(endpoint==='/api/quit') {kill();serial++;job=null;board=null;preview=null;exports=null;bestChecked=null;clearTransaction=null;ruleTransaction=null;importedNetRules=null;pendingRuleReuse=null;inputText=null;logs.length=0;notify();return state();}
+    if(endpoint==='/api/quit') {kill();serial++;job=null;board=null;preview=null;exports=null;bestChecked=null;clearTransaction=null;ruleTransaction=null;scaleTransaction=null;importedNetRules=null;pendingRuleReuse=null;inputText=null;logs.length=0;notify();return state();}
     throw new Error("This action isn’t supported. Reload RamenRouter and try again.");
   }
   function getDownload(type) {

@@ -2,7 +2,7 @@
 
 (() => {
   const $ = id => document.getElementById(id);
-  const activeStates = new Set(['inspecting', 'clearing', 'updating_rules', 'starting', 'running', 'routing', 'fanout', 'optimizing', 'stopping', 'loading', 'pausing', 'paused']);
+  const activeStates = new Set(['inspecting', 'clearing', 'updating_rules', 'updating_scale', 'starting', 'running', 'routing', 'fanout', 'optimizing', 'stopping', 'loading', 'pausing', 'paused']);
   const terminalStates = new Set(['completed', 'stopped', 'timed_out', 'error', 'failed']);
   const palette = ['#df9676', '#73c7c2', '#c1ab69', '#a394d3', '#83b76e', '#be86a6', '#73a0d0', '#a5b4bf'];
   const nativeEngine = globalThis.RamenNative;
@@ -33,6 +33,8 @@
   let downloadedDsnJobId = null;
   let remainingRenderKey = '';
   let clearRoutingJobId = null;
+  let boardScaleData = null;
+  let pendingBoardScale = null;
   let netLayersData = null;
   let netLayerDrafts = new Map();
   let netShortDrafts = new Map();
@@ -66,7 +68,7 @@
   let drawQueued = false;
 
   const icons = { ready: '○', completed: '✓', stopped: 'Ⅱ', paused: 'Ⅱ', pausing: '◷', timed_out: '◷', error: '!', failed: '!' };
-  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing traces and vias', updating_rules: 'Updating routing rules', starting: 'Getting started', running: 'Routing your board', routing: 'Routing your board', fanout: 'Adding pad escapes', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Run complete', stopped: 'Run stopped', timed_out: 'Time limit reached', error: 'This run needs a look', failed: 'This run needs a look', idle: 'Ready when you are' };
+  const labels = { ready: 'Board ready', inspecting: 'Reading your board', clearing: 'Clearing traces and vias', updating_rules: 'Updating routing rules', updating_scale: 'Updating board scale', starting: 'Getting started', running: 'Routing your board', routing: 'Routing your board', fanout: 'Adding pad escapes', optimizing: 'Refining routes', stopping: 'Stopping safely', pausing: 'Time limit reached', paused: 'Paused · time limit reached', completed: 'Run complete', stopped: 'Run stopped', timed_out: 'Time limit reached', error: 'This run needs a look', failed: 'This run needs a look', idle: 'Ready when you are' };
 
   function toast(message, error = false) {
     clearTimeout(toastTimer);
@@ -109,7 +111,7 @@
     return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
   }
 
-  function phaseName(phase) { return ({ reading: 'Reading your board', checking: 'Checking routing rules', advising: 'Looking for placement changes that may help', exporting: 'Getting your exports ready', rasterizing: 'Mapping copper and clearances', loading: 'Loading your board', routing: 'Connecting pads', fanout: 'Finding room for pad escapes', optimizing: 'Refining routes', deep_search: 'Trying different routes', pad_escape: 'Finding a way out of the pads', finishing: 'Working on the remaining connections', updating_rules: 'Updating routing rules' })[phase] || phase; }
+  function phaseName(phase) { return ({ reading: 'Reading your board', checking: 'Checking routing rules', advising: 'Looking for placement changes that may help', exporting: 'Getting your exports ready', rasterizing: 'Mapping copper and clearances', loading: 'Loading your board', routing: 'Connecting pads', fanout: 'Finding room for pad escapes', optimizing: 'Refining routes', deep_search: 'Trying different routes', pad_escape: 'Finding a way out of the pads', finishing: 'Working on the remaining connections', updating_rules: 'Updating routing rules', updating_scale: 'Updating board scale' })[phase] || phase; }
 
   function isActive() { return Boolean(currentState?.job && activeStates.has(currentState.job.state)); }
   function awaitingMoreTime(job = currentState?.job) { return job?.operation === 'run' && ['pausing', 'paused'].includes(job.state); }
@@ -169,6 +171,96 @@
     } finally { previousRulesAction = null; busy = false; updateControls(); }
   }
 
+  function boardScaleName(profile) {
+    return profile === 'easyeda-standard' ? 'EasyEDA Standard' : 'DSN units';
+  }
+
+  function boardSizeText(scale, factor = 1) {
+    return Number.isFinite(scale?.widthMm) && Number.isFinite(scale?.heightMm)
+      ? `${number(scale.widthMm * factor, 2)} × ${number(scale.heightMm * factor, 2)} mm`
+      : 'Size unavailable';
+  }
+
+  function boardScaleDraftProfile() {
+    return document.querySelector('input[name="boardScaleProfile"]:checked')?.value || 'auto';
+  }
+
+  function updateBoardScaleDraft() {
+    if (!boardScaleData) return;
+    const selected = boardScaleDraftProfile();
+    const effective = selected === 'auto' ? boardScaleData.autoProfile : selected;
+    const unit = effective === 'easyeda-standard' ? .254 : boardScaleData.declaredMmPerUnit;
+    const factor = Number.isFinite(unit) && boardScaleData.mmPerUnit > 0 ? unit / boardScaleData.mmPerUnit : 1;
+    $('boardScaleDimensions').textContent = boardSizeText(boardScaleData, factor);
+    const diameters = [...new Set((boardScaleData.viaDiametersMm || []).map(via => via.diameterMm * factor).filter(value => Number.isFinite(value) && value > 0))].sort((a, b) => a - b);
+    $('boardScaleViaDiameters').textContent = diameters.length ? `${diameters.map(value => number(value, 3)).join(', ')} mm` : 'No via sizes in this file';
+    $('boardScaleAutoDetail').textContent = `Use the file's units, or a clearly recognised export scale. For this file: ${boardScaleName(boardScaleData.autoProfile)}.`;
+    $('applyBoardScale').textContent = selected === boardScaleData.selectedProfile ? 'Keep this scale' : 'Apply scale';
+  }
+
+  function updateBoardScaleControls(available, active, previousRulesPending) {
+    const job = currentState?.job, scale = job?.boardScale || board?.boardScale;
+    $('boardScaleSetting').hidden = !job || job.state === 'idle';
+    $('boardScaleButton').disabled = !available || active || previousRulesPending || !job?.boardScale;
+    $('boardScaleSummary').textContent = job?.state === 'updating_scale' ? 'Updating board sizes…'
+      : scale ? `${scale.selectedProfile === 'auto' ? 'Automatic' : boardScaleName(scale.effectiveProfile || scale.profile)} · ${boardSizeText(scale)}` : 'Checking board sizes…';
+    $('boardScaleHint').hidden = !scale || scale.selectedProfile !== 'auto' || scale.detectedProfile !== 'easyeda-standard' || scale.effectiveProfile === 'easyeda-standard';
+    if ($('boardScaleDialog').open && (boardScaleData?.jobId !== job?.id || active)) $('boardScaleDialog').close();
+    for (const id of ['closeBoardScale', 'cancelBoardScale', 'applyBoardScale', 'boardScaleAuto', 'boardScaleDeclared']) $(id).disabled = !available || active;
+    $('boardScaleEasyeda').disabled = !available || active || !boardScaleData?.canUseEasyedaStandard;
+    $('boardScaleEasyeda').closest('label').classList.toggle('unavailable', !boardScaleData?.canUseEasyedaStandard);
+    $('boardScaleEasyeda').title = boardScaleData?.canUseEasyedaStandard ? '' : 'This choice is for EasyEDA Standard files exported with mil units.';
+  }
+
+  async function openBoardScale() {
+    const job = currentState?.job;
+    if (!connected || busy || isActive() || hasPreviousRulesDecision() || !job?.boardScale) return;
+    busy = true; updateControls();
+    try {
+      const data = await api('/api/board-scale');
+      if (currentState?.job?.id !== job.id || isActive()) return;
+      boardScaleData = data;
+      for (const id of ['boardScaleAuto', 'boardScaleEasyeda', 'boardScaleDeclared']) $(id).checked = $(id).value === data.selectedProfile;
+      updateBoardScaleDraft();
+      $('boardScaleDialog').showModal();
+    } catch (error) { toast(error.message, true); }
+    finally { busy = false; updateControls(); if ($('boardScaleDialog').open) $('boardScaleAuto').focus(); }
+  }
+
+  function updateBoardScaleTransaction(job, previousJob) {
+    const pending = pendingBoardScale;
+    if (!pending) return;
+    if (!pending.transactionJobId && job?.operation === 'board-scale' && job.id !== pending.sourceJobId && previousJob?.id === pending.sourceJobId) pending.transactionJobId = job.id;
+    if (job?.id === pending.transactionJobId && activeStates.has(job.state)) return;
+    if (job?.id === pending.transactionJobId && job.operation === 'board-scale' && job.state === 'ready' && !job.scaleError && job.boardScale?.selectedProfile === pending.profile) {
+      toast('Board sizes updated. Your routes and export coordinates stay the same.');
+      pendingBoardScale = null;
+    } else if (job?.id === pending.sourceJobId && !activeStates.has(job.state) && (pending.transactionJobId || job.scaleError)) {
+      if (job.scaleError) toast(`Could not update the scale. Your board and result are still here. ${job.scaleError}`, true);
+      else toast('Scale change cancelled. Your board and result are still here.');
+      pendingBoardScale = null;
+    } else if (job?.id !== pending.sourceJobId && job?.id !== pending.transactionJobId) pendingBoardScale = null;
+  }
+
+  async function applyBoardScale() {
+    const data = boardScaleData, profile = boardScaleDraftProfile();
+    if (!data || !connected || busy || isActive() || currentState?.job?.id !== data.jobId) return;
+    $('boardScaleDialog').close();
+    if (profile === data.selectedProfile) return;
+    const pending = { sourceJobId: data.jobId, transactionJobId: null, profile };
+    pendingBoardScale = pending;
+    busy = true; updateControls();
+    try {
+      const state = await post('/api/board-scale', { jobId: data.jobId, profile });
+      if (pendingBoardScale === pending && state?.job?.operation === 'board-scale' && state.job.id !== data.jobId) {
+        pending.transactionJobId = state.job.id;
+        updateBoardScaleTransaction(state.job, { id: data.jobId });
+      }
+    }
+    catch (error) { pendingBoardScale = null; toast(error.message, true); }
+    finally { busy = false; updateControls(); }
+  }
+
   function updateControls() {
     const job = currentState?.job;
     const active = isActive();
@@ -184,6 +276,7 @@
     $('forceStopButton').disabled = !available || forcedStop;
     for (const id of ['dropzone', 'replaceButton', 'demoButton']) $(id).disabled = !available || active || previousRulesPending;
     const routing = job?.routingSummary;
+    updateBoardScaleControls(available, active, previousRulesPending);
     $('clearRoutingButton').hidden = !job || job.state === 'idle';
     $('clearRoutingButton').disabled = !available || active || previousRulesPending || !routing || routing.traceCount + routing.viaCount === 0;
     $('clearRoutingButton').title = routing && routing.traceCount + routing.viaCount === 0 ? 'There are no traces or routing vias to clear yet.' : 'Clear every trace and routing via from this board.';
@@ -225,6 +318,7 @@
     let hint = !job ? 'Load a board to get started.' : (active ? 'Working on your board. Let it cook.' : (job.routingCleared ? 'Your next run starts with the cleared board.' : 'Your next run starts with the board you loaded.'));
     if (job?.state === 'clearing') hint = 'Removing routes and checking your board…';
     if (job?.state === 'updating_rules') hint = 'Applying your layer choices and checking the board…';
+    if (job?.state === 'updating_scale') hint = 'Updating the displayed sizes. Your routes stay here…';
     if (busy) hint = 'Preparing your board…';
     if (previousRulesPending) hint = 'Choose your routing rules before starting.';
     if (stopping) hint = forcedStop ? 'Stopping now…' : 'Finishing this step, then stopping…';
@@ -705,6 +799,7 @@
     if (state.appVersion) $('appVersion').textContent = state.appVersion;
     if (state.engineVersion) $('engineVersion').textContent = state.engineVersion;
     const job = state.job;
+    updateBoardScaleTransaction(job, previousJob);
     if (pendingRoutingOptions?.transactionJobId) {
       const pending = pendingRoutingOptions;
       if (job?.id === pending.transactionJobId && job.state === 'ready' && !job.ruleError) {
@@ -730,7 +825,7 @@
     }
     const hasJob = Boolean(job && job.state !== 'idle');
     const active = isActive();
-    if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules'].includes(job.state) && !['clearing', 'updating_rules'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
+    if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules', 'updating_scale'].includes(job.state) && !['clearing', 'updating_rules', 'updating_scale'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
       for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
       for (const key of ['maxPasses', 'timeoutMinutes']) if (typeof job.settings[key] === 'number') $(key).value = job.settings[key];
     }
@@ -742,7 +837,7 @@
     if (hasJob) {
       $('fileName').textContent = job.name || 'Untitled board';
       $('fileName').title = job.name || 'Untitled board';
-      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading your board…' : (job.state === 'clearing' ? 'Clearing traces and vias…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.routingCleared ? 'DSN · traces and routing vias cleared' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'DSN · your routing rules applied' : 'Your DSN is loaded'))));
+      $('fileDetail').textContent = job.state === 'inspecting' ? 'Reading your board…' : (job.state === 'updating_scale' ? 'Updating board sizes…' : (job.state === 'clearing' ? 'Clearing traces and vias…' : (job.state === 'updating_rules' ? 'Updating routing rules…' : (job.routingCleared ? 'DSN · traces and routing vias cleared' : ((job.routingRulesChanged || job.layerRulesChanged) ? 'DSN · your routing rules applied' : 'Your DSN is loaded')))));
       document.title = `${job.name || 'Board'} · RamenRouter`;
     }
     const completedWithRuleIssues = job?.state === 'completed' && (job.stats?.totalViolations ?? job.stats?.clearanceViolations ?? 0) > 0;
@@ -773,6 +868,7 @@
       remainingRenderKey = '';
       boardKey = '';
       board = null;
+      boardScaleData = null;
       updateViaPreviewNote();
       visibleLayers.clear();
       layerRenderKey = '';
@@ -807,6 +903,7 @@
     try {
       const geometry = await api('/api/board');
       if (!geometry || !Array.isArray(geometry.layers) || key !== currentBoardKey()) return;
+      const scaleChanged = board?.boardScale?.mmPerUnit && geometry.boardScale?.mmPerUnit && board.boardScale.mmPerUnit !== geometry.boardScale.mmPerUnit;
       board = geometry;
       boardKey = key;
       updateLayers();
@@ -818,7 +915,7 @@
       if (board.copperFills?.length) parts.push(`${number(board.copperFills.length)} imported copper regions`);
       if (bounds) parts.push(`${number(bounds[2] - bounds[0], 1)} × ${number(bounds[3] - bounds[1], 1)} mm`);
       $('geometrySummary').textContent = parts.join(' · ');
-      if (fit) fitBoard(); else draw();
+      if (fit || scaleChanged) fitBoard(); else draw();
       updateControls();
       syncActivityVisual();
     } catch (error) {
@@ -1969,7 +2066,7 @@
   $('previousRulesImported').addEventListener('click', () => void choosePreviousRules(false));
   $('closePreviousRules').addEventListener('click', () => void choosePreviousRules(false));
   $('previousRulesDialog').addEventListener('cancel', event => { event.preventDefault(); if (!previousRulesAction) void choosePreviousRules(false); });
-  for (const id of ['aboutDialog', 'runReportDialog', 'clearRoutingDialog']) $(id).addEventListener('close', updateControls);
+  for (const id of ['aboutDialog', 'runReportDialog', 'clearRoutingDialog', 'boardScaleDialog']) $(id).addEventListener('close', updateControls);
   $('runReportButton').addEventListener('click', openRunReport);
   $('closeRunReport').addEventListener('click', () => $('runReportDialog').close());
   $('closeRunReportBottom').addEventListener('click', () => $('runReportDialog').close());
@@ -1983,6 +2080,11 @@
   });
   $('dropzone').addEventListener('click', () => { acknowledgeAttention(); $('fileInput').click(); });
   $('replaceButton').addEventListener('click', () => $('fileInput').click());
+  $('boardScaleButton').addEventListener('click', () => void openBoardScale());
+  $('applyBoardScale').addEventListener('click', () => void applyBoardScale());
+  for (const id of ['boardScaleAuto', 'boardScaleEasyeda', 'boardScaleDeclared']) $(id).addEventListener('change', updateBoardScaleDraft);
+  for (const id of ['closeBoardScale', 'cancelBoardScale']) $(id).addEventListener('click', () => $('boardScaleDialog').close());
+  $('boardScaleDialog').addEventListener('close', () => { boardScaleData = null; });
   $('clearRoutingButton').addEventListener('click', openClearRouting);
   $('confirmClearRouting').addEventListener('click', () => void confirmClearRouting());
   $('cancelClearRouting').addEventListener('click', () => $('clearRoutingDialog').close());
@@ -2094,7 +2196,7 @@
   canvas.addEventListener('pointerleave', () => { $('cursorPosition').textContent = 'Drag to pan · scroll to zoom'; });
   canvas.addEventListener('dblclick', fitBoard);
   document.addEventListener('keydown', event => {
-    if (event.target.matches('input,textarea,select') || $('aboutDialog').open || $('clearRoutingDialog').open || $('netLayersDialog').open || $('runReportDialog').open || $('previousRulesDialog').open || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (event.target.matches('input,textarea,select') || $('aboutDialog').open || $('boardScaleDialog').open || $('clearRoutingDialog').open || $('netLayersDialog').open || $('runReportDialog').open || $('previousRulesDialog').open || event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key.toLowerCase() === 'f') { event.preventDefault(); fitBoard(); }
   });
   if (typeof nativeEngine?.subscribeActivity === 'function') nativeEngine.subscribeActivity(event => {
