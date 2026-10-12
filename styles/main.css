@@ -378,6 +378,13 @@ dialog p{font-size:16px;line-height:1.65}
 .time-budget-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .time-budget-actions button{flex:1 1 110px;min-height:44px;padding:9px 10px;border:1px solid #928362;border-radius:5px;background:#3b372a;color:#f2e7ce;font-size:15px;line-height:1.4}
 .time-budget-actions #extendTimeButton{background:var(--teal);border-color:#8ce9cd;color:#10382d;font-weight:600}
+.time-budget-actions #extendAttemptsButton{background:var(--teal);border-color:#8ce9cd;color:#10382d;font-weight:600}
+.current-best-actions{padding:14px;margin:0 0 17px;border:1px solid #637f77;border-radius:7px;background:#20342f;color:#dbe9df}
+.current-best-actions h3{font-size:17px;line-height:1.4;margin:0;font-weight:600}
+.current-best-actions p{font-size:14px;line-height:1.55;margin:9px 0 0;color:#c0d3c6}
+.best-result-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.best-result-actions button{flex:1 1 120px;min-height:44px;padding:9px 10px;border:1px solid #708d79;border-radius:5px;background:#294336;color:#e3eee5;font-size:15px;line-height:1.4}
+.current-best-actions .best-result-note{font-size:13px;color:#b6cbbd}
 .time-budget-prompt .time-budget-note{font-size:13px;color:#cbbb9e}
 .job-state.paused .job-state-icon,.job-state.pausing .job-state-icon{border-color:#a18456;color:#edca8b;background:#302b21}
 .remaining-routes{margin-top:18px;padding-top:17px;border-top:1px solid #3c5660}

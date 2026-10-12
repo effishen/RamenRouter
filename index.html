@@ -13,6 +13,7 @@
   <script src="scripts/geometry.js" defer></script>
   <script src="scripts/optimizer.js" defer></script>
   <script src="scripts/fanout.js" defer></script>
+  <script src="scripts/flexible-finisher.js" defer></script>
   <script src="scripts/router.js" defer></script>
   <script src="scripts/advisor.js" defer></script>
   <script src="scripts/benchmark.js" defer></script>
@@ -27,7 +28,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.3.8</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.4.0</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
     <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
@@ -88,11 +89,18 @@
         <p id="stopResultDetail" role="status" aria-live="polite"></p>
         <div class="stop-result-actions"><button id="viewBestResult" type="button">View best result</button><button id="keepStopped" type="button">Keep stopped</button></div>
       </section>
+      <section class="current-best-actions" id="currentBestActions" aria-labelledby="currentBestTitle" hidden>
+        <h3 id="currentBestTitle">Work on the current best</h3>
+        <p>Your checked result stays available. Try another finishing step without starting the board from scratch.</p>
+        <div class="best-result-actions"><button id="refineBestButton" type="button">Refine current best</button><button id="flexibleFinishButton" type="button">Try flexible finishing</button></div>
+        <p id="currentBestFinishNote" class="best-result-note"></p>
+      </section>
       <section class="time-budget-prompt" id="timeBudgetPrompt" aria-labelledby="timeBudgetTitle" hidden>
         <h3 id="timeBudgetTitle">Continue this run?</h3>
         <p id="timeBudgetDetail" role="status" aria-live="polite"></p>
-        <label for="extraTimeMinutes">Extra time <span class="extra-time-input"><input type="number" id="extraTimeMinutes" min="1" max="1440" step="1" value="30" required><span>minutes</span></span></label>
-        <div class="time-budget-actions"><button id="extendTimeButton" type="button">Extend time</button><button id="finishTimedRun" type="button">Keep best &amp; stop</button></div>
+        <label for="extraAttempts" id="extraAttemptsLabel" hidden>Extra routing attempts <span class="extra-time-input"><input type="number" id="extraAttempts" min="1" max="100" step="1" value="12" required><span>attempts</span></span></label>
+        <label for="extraTimeMinutes"><span id="extraTimeLabel">Extra time</span> <span class="extra-time-input"><input type="number" id="extraTimeMinutes" min="1" max="1440" step="1" value="30" required><span>minutes</span></span></label>
+        <div class="time-budget-actions"><button id="extendAttemptsButton" type="button" hidden>Add attempts</button><button id="extendTimeButton" type="button">Extend time</button><button id="refinePausedBest" type="button">Refine current best</button><button id="flexiblePausedFinish" type="button">Try flexible finishing</button><button id="finishTimedRun" type="button">End &amp; show best</button></div>
         <p id="timeBudgetStopDetail" class="time-budget-note"></p>
       </section>
       <div class="elapsed-row"><span>Elapsed time</span><strong id="elapsedValue">—</strong></div>
@@ -141,7 +149,7 @@
       <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Routing log <span aria-hidden="true">↓</span></button></div>
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
       <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.3.8</span><span>Made to fit · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.4.0</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -188,6 +196,7 @@
         </div>
         <div class="setting-block optimize-setting"><label class="switch-row" for="optimize"><span><strong>Optimize after routing</strong></span><span class="switch"><input type="checkbox" id="optimize" name="optimize" checked><span class="switch-track"></span></span></label><p>Tidy up completed routes and try to use fewer vias.</p></div>
         <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Give tricky nets another go and try to untangle the last few connections. Keep the best checked result along the way.</p></div>
+        <div class="setting-block flexible-finishing-setting"><label class="switch-row" for="flexibleFinishing"><span><strong>Flexible finishing</strong></span><span class="switch"><input type="checkbox" id="flexibleFinishing" name="flexibleFinishing"><span class="switch-track"></span></span></label><p>When four or fewer pad connections remain, try small bends and shifts in movable tracks to make room. Your components, fixed copper and routing rules stay in place. You can also try this on your current best result.</p></div>
         <div class="setting-block direction-setting"><label class="switch-row" for="preferredDirections"><span><strong>Prefer alternating layer directions</strong></span><span class="switch"><input type="checkbox" id="preferredDirections" name="preferredDirections"><span class="switch-track"></span></span></label><p>Prefer vertical routes on one layer and horizontal on the next. Routes can still bend when needed. Think of it as a preference, not a hard rule.</p><p id="directionLayerPreview" class="direction-layer-preview"></p></div>
         <div class="setting-block benchmark-setting"><label class="switch-row" for="benchmarkMode"><span><strong>Fixed-work benchmark</strong></span><span class="switch"><input type="checkbox" id="benchmarkMode" name="benchmarkMode"><span class="switch-track"></span></span></label><p>Give difficult fanout searches the same work budget on each computer for a fairer comparison. Use the same board and rules on both. If time runs out, extend the run until it finishes.</p></div>
         <details class="advanced-rules"><summary>Advanced rules <span>1 OPTION</span></summary>

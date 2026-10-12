@@ -557,12 +557,21 @@ function createRamenGeometry(onActivity=null) {
     const allowedLayers=new Set((board.layers||[]).map((l,i)=>l.index??i));
     const netClearance=net=>Math.max(0,nets.get(netKey(net))?.routingClearance??nets.get(netKey(net))?.clearance??board.defaultClearance??0);
     const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}));
-    const violations=[],widthDeviations=[],seen=new Set();
+    const violations=[],widthDeviations=[],seen=new Map();
     // A poured polygon can have thousands of edges. Check only the nearby
     // edges when proving a circle or trace has enough clearance; keep the
     // exact distance calculation for every possible violation.
     const separatedPolygon=polygonPairChecker().separated;
-    function violation(type,key,detail){if(seen.has(key))return;seen.add(key);violations.push({type,...detail});}
+    function violation(type,key,detail){
+      if(seen.has(key)){
+        const index=seen.get(key),previous=violations[index];
+        // A polyline pair can have several conflicting segments. Keep the
+        // worst contact so an earlier clearance issue cannot hide a short.
+        if(Number.isFinite(detail.actual)&&(!Number.isFinite(previous.actual)||detail.actual<previous.actual-EPS))violations[index]={type,...detail};
+        return;
+      }
+      seen.set(key,violations.length);violations.push({type,...detail});
+    }
     for(const net of board.nets||[])if(!Number.isFinite(net.width)||net.width<=0||!Number.isFinite(net.clearance)||net.clearance<0)violation('invalid_rule',`nrule:${net.id}`,{net:net.id,width:net.width,clearance:net.clearance});
     for(const object of objects)if((netKey(object.net)!==null&&!nets.has(netKey(object.net)))||(object.kind!=='pad'&&netKey(object.net)===null))violation('unknown_net',`n:${object.uid}`,{kind:object.kind,index:object.index,net:object.net});
     for(const p of primitives)if(!allowedLayers.has(p.layer))violation('unknown_layer',`l:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,layer:p.layer});

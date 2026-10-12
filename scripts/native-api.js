@@ -2,6 +2,7 @@
 'use strict';
 (() => {
   const active = new Set(['inspecting','starting','running','pausing','paused','stopping','clearing','updating_rules','updating_scale']);
+  const routingOperations = new Set(['run','refine-best','flexible-finish']);
   const subscribers = new Set(), activitySubscribers = new Set();
   const benchmark=createRamenBenchmark();
   const hostGeometry=createRamenGeometry(),ruleMemory=createRamenRuleMemory();
@@ -12,7 +13,7 @@
   let job = null, worker = null, workerUrl = null, inputText = null;
   let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, scaleTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.3.8',engineVersion:'Ramen JS 0.3.8',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.4.0',engineVersion:'Ramen JS 0.4.0',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
     const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
@@ -23,7 +24,7 @@
     if (logs.length > 20000) logs.splice(0,logs.length-20000);
   }
   function elapsed() { return job ? Math.max(0,((job.endedAt||job.pausedAt||Date.now())-job.startedAt-(job.pausedDurationMs||0))/1000) : 0; }
-  function remaining() { return job?.operation==='run'&&Number.isFinite(job.deadlineAt)?Math.max(0,(job.deadlineAt-(job.endedAt??Date.now()))/1000):null; }
+  function remaining() { return routingOperations.has(job?.operation)&&Number.isFinite(job.deadlineAt)?Math.max(0,(job.deadlineAt-(job.endedAt??job.pausedAt??Date.now()))/1000):null; }
   function state() { return {...base,job:job?{...job,elapsedSeconds:elapsed(),remainingSeconds:remaining(),log:logs.slice(-180)}:null}; }
   function kill() {
     if(job?.activity)job.activity={...job.activity,visual:null,sequence:++activitySequence};
@@ -34,7 +35,7 @@
   function rememberChecked(m) {
     if(!m.board||!m.preview||!m.exports||!m.stats?.drcChecked||!m.stats?.widthRulesChecked)return;
     bestChecked={board:m.board,preview:m.preview,stats:m.stats,exports:m.exports,advice:m.advice||{items:[]},fromInput:!!m.fromInput};
-    job.bestResult={available:true,unrouted:m.stats.unrouted,traceCount:m.stats.traceCount,viaCount:m.stats.viaCount,fromInput:!!m.fromInput};
+    job.bestResult={available:true,unrouted:m.stats.unrouted,remainingPadLinks:m.stats.remainingPadLinks,traceCount:m.stats.traceCount,viaCount:m.stats.viaCount,fromInput:!!m.fromInput};
   }
   function routingSummary(b) {
     return {traceCount:(b?.traces||[]).length,viaCount:(b?.vias||[]).length,
@@ -109,7 +110,7 @@
     log(message);notify();return state();
   }
   function freezeRunReport(status) {
-    if(job?.operation!=='run'||!job.runReport)return;
+    if(!routingOperations.has(job?.operation)||!job.runReport)return;
     const retained=benchmark.cleanStats(bestChecked?.stats),report=job.runReport;
     const pausedMs=report.timing.pausedMs+(job.benchmarkPauseReceivedAt!==null&&job.benchmarkPauseReceivedAt!==undefined?Math.max(0,performance.now()-job.benchmarkPauseReceivedAt):0);
     const progress=report.progress.map(point=>({...point})),last=progress.at(-1);
@@ -137,20 +138,20 @@
     const generation=job.budgetGeneration,timeLimit=Math.max(0,job.deadlineAt-Date.now());
     timer=setTimeout(()=>{
       if(id!==serial||!job||!active.has(job.state)||job.budgetGeneration!==generation)return;
-      if(job.operation!=='run'){stopWithBest('timed_out',"Time’s up.");return;}
+      if(!routingOperations.has(job.operation)){stopWithBest('timed_out',"Time’s up.");return;}
       if(job.state==='paused'||job.state==='pausing')return;
-      job.resumeState=job.state;job.state='pausing';
+      job.resumeState=job.state;job.state='pausing';job.pauseReason='time';
       if(job.activity)job.activity={...job.activity,visual:null,sequence:++activitySequence};
       worker?.postMessage({type:'pause-budget',generation});
       log("Time’s up. Pausing at the next safe point and keeping the current work.");notify();
     },timeLimit);
-    if(job.operation!=='run')watchdog=setTimeout(()=>{if(id===serial&&job&&active.has(job.state))stopWithBest('timed_out',"This step ran past its time limit and was stopped.");},timeLimit+30000);
+    if(!routingOperations.has(job.operation))watchdog=setTimeout(()=>{if(id===serial&&job&&active.has(job.state))stopWithBest('timed_out',"This step ran past its time limit and was stopped.");},timeLimit+30000);
   }
   function getSettings(value={}) {
-    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
+    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
     // Layer-access-only preparation is derived by the router, never an external setting.
     delete s.layerAccessOnly;
-    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
+    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','flexibleFinishing','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
     for(const [k,min,max] of [['maxPasses',1,100],['timeoutMinutes',1,1440]]) {
       if(!Number.isFinite(s[k])||!Number.isInteger(s[k])||s[k]<min||s[k]>max) throw new Error(k+" needs a whole number between "+min+' and '+max+'.');
     }
@@ -173,6 +174,7 @@
     function measured(stage,fn){const end=measurement?.begin(stage);try{const result=fn();if(result?.then)return result.finally(()=>end?.());end?.();return result;}catch(error){end?.();throw error;}}
     function reportSnapshot(status='running',force=false){if(!measurement)return null;const now=performance.now();if(!force&&now-lastMeasurementAt<1000)return null;lastMeasurementAt=now;return measurement.snapshot(status,true);}
     let managedBudget=false,budgetGeneration=0,pauseRequested=false,pauseResolve=null,pausedAt=null,pausedDurationMs=0;
+    let continuationResolve=null,continuationId=null,continuationSerial=0;
     const yieldTask=async()=>{
       await yieldTurn();
       const runReport=reportSnapshot();if(runReport)self.postMessage({type:'measurement',runReport});
@@ -184,6 +186,12 @@
     };
     yieldTask.managesBudget=true;
     yieldTask.now=()=>{const now=Date.now();return now-pausedDurationMs-(pausedAt?now-pausedAt:0);};
+    yieldTask.requestContinuation=detail=>{
+      if(cancelled)return Promise.resolve({action:'finish'});
+      continuationId=String(++continuationSerial);pausedAt=Date.now();measurement?.pause();
+      self.postMessage({type:'attempts-paused',requestId:continuationId,generation:budgetGeneration,pausedAt,detail,runReport:reportSnapshot('paused',true)});
+      return new Promise(resolve=>{continuationResolve=resolve;});
+    };
     function resumeBudget(message){
       if(!managedBudget||!Number.isInteger(message.generation)||message.generation<=budgetGeneration||!Number.isFinite(message.deadlineAt))return;
       budgetGeneration=message.generation;deadline=message.deadlineAt;pauseRequested=false;
@@ -244,7 +252,7 @@
     function stats(b,full=true,connection=null,validation=null) {
       const c=connection||geo.connectivity(b),v=full?(validation||geo.validate(b)):null;
       let length=0; for(const t of b.traces||[]) for(let i=1;i<t.points.length;i++) length+=Math.hypot(t.points[i][0]-t.points[i-1][0],t.points[i][1]-t.points[i-1][1]);
-      return {unrouted:c.unrouted,viaCount:(b.vias||[]).length,traceCount:(b.traces||[]).length,traceLengthMm:length*b.units.mmPerUnit,
+      return {unrouted:c.unrouted,remainingPadLinks:c.components.reduce((sum,component)=>sum+Math.max(0,component.groups.filter(group=>group.pads?.length).length-1),0),viaCount:(b.vias||[]).length,traceCount:(b.traces||[]).length,traceLengthMm:length*b.units.mmPerUnit,
         inactiveLayerViolations:v?v.violations.filter(issue=>issue.type==='inactive_layer').length:null,clearanceViolations:v?v.clearanceViolations:null,totalViolations:v?(v.totalViolations??v.clearanceViolations):null,viaInPadViolations:v?v.viaInPadViolations:null,outlineViolations:v?v.outlineViolations:null,keepoutViolations:v?v.keepoutViolations:null,drcChecked:!!v,belowNominalWidthTraceCount:v?v.belowNominalWidthTraceCount:null,widthRulesChecked:!!v,
         netCount:b.nets.length,componentCount:new Set(b.pads.map(p=>p.component)).size,layerCount:b.layers.length};
     }
@@ -273,7 +281,7 @@
       await yieldTask();
       const report=prepared?.validation||measured('checking',()=>geo.validate(result));
       const connection=prepared?.connection||measured('checking',()=>geo.connectivity(result));
-      const checkedStats={...finalStats,unrouted:connection.unrouted,totalViolations:report.totalViolations??report.clearanceViolations,belowNominalWidthTraceCount:report.belowNominalWidthTraceCount,drcChecked:true,widthRulesChecked:true};
+      const checkedStats={...finalStats,unrouted:connection.unrouted,remainingPadLinks:connection.components.reduce((sum,component)=>sum+Math.max(0,component.groups.filter(group=>group.pads?.length).length-1),0),totalViolations:report.totalViolations??report.clearanceViolations,belowNominalWidthTraceCount:report.belowNominalWidthTraceCount,drcChecked:true,widthRulesChecked:true};
       measurement?.checkpoint(checkedStats,fromInput);
       finalStats=checkedStats;
       stage('advising',"Checking what’s still missing and what might help.",{},writeLog);
@@ -282,21 +290,31 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.3.8',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.4.0',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
-      if(m.type==='stop') {cancelled=true;pauseResolve?.();pauseResolve=null;return;}
+      if(m.type==='stop') {cancelled=true;pauseResolve?.();pauseResolve=null;continuationResolve?.({action:'finish'});continuationResolve=null;continuationId=null;return;}
       if(m.type==='pause-budget'){if(managedBudget&&m.generation===budgetGeneration)pauseRequested=true;return;}
       if(m.type==='extend-budget'){resumeBudget(m);return;}
-      if(!['inspect','run','clear','layer-rules','board-scale'].includes(m.type)) return;
+      if(m.type==='extend-attempts'){
+        if(m.requestId!==continuationId||!continuationResolve||!Number.isInteger(m.extraAttempts)||m.extraAttempts<1||m.extraAttempts>100||m.generation<=budgetGeneration)return;
+        measurement?.markContinuation?.();
+        resumeBudget(m);const resolve=continuationResolve;continuationResolve=null;continuationId=null;
+        resolve({action:'continue',extraAttempts:m.extraAttempts,extraTimeMs:m.extraTimeMs||0});return;
+      }
+      if(!['inspect','run','refine-best','flexible-finish','clear','layer-rules','board-scale'].includes(m.type)) return;
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
-        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.8',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.8',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        const bestAction=m.type==='refine-best'||m.type==='flexible-finish';
+        managedBudget=m.type==='run'||bestAction;measurement=managedBudget?benchmark.createCollector({appVersion:'0.4.0',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,operation:m.type,settings:benchmark.cleanSettings(m.options),appVersion:'0.4.0',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        if(bestAction)measurement?.markContinuation?.();
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
-        const b=measured('reading',()=>dsn.parse(m.text,m.name));measurement?.setNets(b.nets);
+        const importedBoard=measured('reading',()=>dsn.parse(m.text,m.name));
+        if(bestAction&&(!m.seedBoard||m.seedBoard.originalText!==m.text||m.seedBoard.filename!==importedBoard.filename||!m.seedBoard._ast))throw new Error('The checked board changed. Choose the current best result and try again.');
+        const b=bestAction?structuredClone(m.seedBoard):importedBoard;measurement?.setNets(b.nets);
         // Apply the run's chosen policy before checking or saving its input fallback.
         if(m.type==='run'&&typeof m.options.viaInPad==='boolean'){
           b.viaAtSmd=m.options.viaInPad;for(const def of b.viaDefs)def.attachAllowed=m.options.viaInPad;
@@ -343,7 +361,7 @@
         measurement?.checkpoint(initial,true);
         // Build the fallback before routing starts. Stop never has to validate,
         // analyze or serialize copper on the UI thread after terminating work.
-        const initialResult=await checkedResult(b,b,m.options,m.name,initial,initial,true,!m.options.fanoutOnly,{connection:inputConnection,validation:inputValidation},true);
+        const initialResult=await checkedResult(b,importedBoard,m.options,m.name,initial,initial,bestAction?!!m.seedFromInput:true,!m.options.fanoutOnly,{connection:inputConnection,validation:inputValidation},true);
         send({type:'loaded',...initialResult,advice:measured('advising',()=>placementAdvice(b,b,false,inputConnection)),checkpointAdvice:initialResult.advice,warnings:b.warnings||[],runReport:reportSnapshot('running',true)});
         await yieldTask();
         if(m.type==='inspect') {
@@ -363,7 +381,9 @@
         // This does not predict that enabling the option will succeed.
         const padViaCandidates=m.options.viaInPad||m.options.fanoutOnly?new Set():restrictedSmdNets(b);
         let lastPreview=0;
-        const out=await router.route(b,m.options,message=>{
+        const routeMethod=bestAction?router.refineCurrentBest:router.route;
+        if(typeof routeMethod!=='function')throw new Error('Refinement is not available in this copy of RamenRouter. Keep the files together and reopen the app.');
+        const out=await routeMethod(b,m.options,message=>{
           if(typeof message==='string') {send({type:'progress',message});return;}
           if(message.type==='activity'){send(message);return;}
           if(message.counters)measurement?.setRounds(message.counters);
@@ -372,7 +392,7 @@
             // The router report was made immediately before retaining this
             // copied snapshot. Connectivity still runs here for its airwires.
             const prepared=message.validation?{validation:message.validation}:null;
-            return checkedResult(message.board,b,m.options,m.name,initial,message.stats,fromInput,!m.options.fanoutOnly,prepared).then(checked=>send({type:'checkpoint',...checked,phase:message.phase,pass:message.pass,counters:message.counters,runReport:reportSnapshot('running',true)}));
+            return checkedResult(message.board,importedBoard,m.options,m.name,initial,message.stats,bestAction?false:fromInput,!m.options.fanoutOnly,prepared).then(checked=>send({type:'checkpoint',...checked,phase:message.phase,pass:message.pass,counters:message.counters,runReport:reportSnapshot('running',true)}));
           }
           const data={type:'progress',phase:message.phase,pass:message.pass,message:message.message,activity:message.activity,log:message.log,counters:message.counters};
           if(message.board && Date.now()-lastPreview>1200) {
@@ -386,7 +406,7 @@
         const result=out?.board||out||b,finalConnection=measured('checking',()=>geo.connectivity(result));await yieldTask();
         const finalValidation=measured('checking',()=>geo.validate(result)),finalStats=measured('checking',()=>stats(result,true,finalConnection,finalValidation));
         measurement?.checkpoint(finalStats,false);
-        const checked=await checkedResult(result,b,m.options,m.name,initial,finalStats,false,!m.options.fanoutOnly,{connection:finalConnection,validation:finalValidation},true);
+        const checked=await checkedResult(result,importedBoard,m.options,m.name,initial,finalStats,false,!m.options.fanoutOnly,{connection:finalConnection,validation:finalValidation},true);
         // A fully prepared result is terminal; do not park it behind a new
         // budget gate after its final exports have already been generated.
         const endState=cancelled||out?.stopped?'stopped':'completed';
@@ -400,21 +420,24 @@
   }
   function launch(type,options,changes) {
     const clearing=type==='clear',editingRules=type==='layer-rules',editingScale=type==='board-scale',transactional=clearing||editingRules||editingScale;
-    const saved=transactional?{job,board,preview,exports,bestChecked,inputText,pendingRuleReuse}:null;
+    const bestAction=type==='refine-best'||type==='flexible-finish',runLike=routingOperations.has(type);
+    const saved=transactional||bestAction?{job,board,preview,exports,bestChecked,inputText,pendingRuleReuse}:null;
+    const seed=bestAction?structuredClone(bestChecked):null;
     const ruleMatchFingerprint=type==='inspect'?null:job?.ruleMatchFingerprint||null;
     const routingCleared=!!job?.routingCleared,layerRulesChanged=!!job?.layerRulesChanged,layerRuleSummary=job?.layerRuleSummary||null;
     kill();
     clearTransaction=clearing?saved:null;ruleTransaction=editingRules?saved:null;scaleTransaction=editingScale?saved:null;pendingRuleReuse=null;
-    if(!transactional) {exports=null;preview=null;board=null;bestChecked=null;}
+    if(!transactional&&!bestAction) {exports=null;preview=null;board=null;bestChecked=null;}
     const id=++serial;
-    const source='"use strict";\n'+[createRamenBenchmark,createRamenRuleMemory,createRamenDSN,createRamenGeometry,createRamenOptimizer,createRamenFanout,createRamenRouter,createRamenAdvisor,workerMain].map(fn=>fn.toString()).join('\n')+'\nworkerMain();';
+    const source='"use strict";\n'+[createRamenBenchmark,createRamenRuleMemory,createRamenDSN,createRamenGeometry,createRamenOptimizer,createRamenFanout,...(typeof createRamenFlexibleFinisher==='function'?[createRamenFlexibleFinisher]:[]),createRamenRouter,createRamenAdvisor,workerMain].map(fn=>fn.toString()).join('\n')+'\nworkerMain();';
     job={id:String(id),name:job?.name||'board.dsn',state:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':type==='inspect'?'inspecting':'starting',phase:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':'loading',startedAt:Date.now(),settings:options,stats:transactional?saved.job.stats:null,initialStats:null,error:null,clearError:null,ruleError:null,scaleError:null,boardScale:transactional?saved.board.boardScale:null,hasOutput:false,routingCleared,layerRulesChanged,layerRuleSummary,routingSummary:transactional?routingSummary(board):null,suggestions:{},advice:{items:[]},bestResult:{available:false},revision:0,pass:0};
     job.routingRulesChanged=layerRulesChanged;job.routingRuleSummary=layerRuleSummary;job.ruleMatchFingerprint=ruleMatchFingerprint;job.previousRulesProposal=null;
     job.operation=type;job.counters=null;job.runReport=null;
+    if(bestAction){job.stats={...seed.stats};job.initialStats={...seed.stats};job.bestResult={available:true,unrouted:seed.stats.unrouted,remainingPadLinks:seed.stats.remainingPadLinks,traceCount:seed.stats.traceCount,viaCount:seed.stats.viaCount,fromInput:seed.fromInput};job.hasOutput=true;job.routingSummary=routingSummary(seed.board);job.boardScale=structuredClone(seed.board.boardScale);job.advice=seed.advice;job.revision=saved.job.revision+1;}
     job.benchmarkEnvironment={browser:String(globalThis.navigator?.userAgent||'Unknown browser').slice(0,160),userAgent:String(globalThis.navigator?.userAgent||'').slice(0,512),platform:String(globalThis.navigator?.platform||'').slice(0,160),hardwareConcurrency:globalThis.navigator?.hardwareConcurrency||null,workerCount:1,animationEnabled:typeof options.animationEnabled==='boolean'?options.animationEnabled:benchmarkEnvironment.animationEnabled,animationChanged:false};job.benchmarkEnvironment.initialAnimationEnabled=job.benchmarkEnvironment.animationEnabled;job.benchmarkPauseReceivedAt=null;
-    if(type==='run')job.runReport=benchmark.createCollector({appVersion:base.appVersion,settings:options,environment:job.benchmarkEnvironment},()=>0).snapshot('running',true);
-    job.budgetGeneration=0;job.pausedAt=null;job.pausedDurationMs=0;job.resumeState=null;
-    job.deadlineAt=job.startedAt+(type==='run'?options.timeoutMinutes*60000:120000);
+    if(runLike){const collector=benchmark.createCollector({appVersion:base.appVersion,settings:options,environment:job.benchmarkEnvironment},()=>0);if(bestAction)collector.markContinuation?.();job.runReport=collector.snapshot('running',true);}
+    job.budgetGeneration=0;job.pausedAt=null;job.pausedDurationMs=0;job.resumeState=null;job.pauseReason=null;job.continuationRequestId=null;
+    job.deadlineAt=job.startedAt+(runLike?options.timeoutMinutes*60000:120000);
     job.lastEngineUpdateAt=null;
     job.activity={message:"Getting the board ready…",phase:job.phase,updatedAt:job.startedAt,source:'host',visual:null,sequence:++activitySequence};
     try {
@@ -424,21 +447,25 @@
       if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);
       if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);
       if(editingScale)restoreBeforeScale("Couldn’t update board scale: "+error.message,error.message);
+      if(bestAction){job.error=error.message;stopWithBest('error',"Couldn’t start this step.");}
       throw error;
     }
     worker.onmessage=e=>{
       if(id!==serial||!job||!active.has(job.state))return;
       const m=e.data;
-      if(m.type==='budget-paused'&&(type!=='run'||m.generation!==job.budgetGeneration))return;
-      if(type==='run'&&m.runReport)job.runReport={...m.runReport,environment:{...m.runReport.environment,...job.benchmarkEnvironment}};
+      if(['budget-paused','attempts-paused'].includes(m.type)&&(!runLike||m.generation!==job.budgetGeneration))return;
+      if(runLike&&m.runReport){job.runReport={...m.runReport,environment:{...m.runReport.environment,...job.benchmarkEnvironment}};if(job.extendedAttempts)job.runReport={...job.runReport,protocol:'normal-v1',workloadFingerprint:null,settings:{...job.runReport.settings,benchmarkMode:false}};}
       if(m.type==='measurement'){notify();return;}
-      if(m.type==='budget-paused'){
-        if(type!=='run'||m.generation!==job.budgetGeneration)return;
+      if(m.type==='budget-paused'||m.type==='attempts-paused'){
+        if(!runLike||m.generation!==job.budgetGeneration)return;
         if(job.state!=='pausing'&&job.state!=='paused')job.resumeState=job.state;
         job.state='paused';job.benchmarkPauseReceivedAt=performance.now();job.pausedAt=Number.isFinite(m.pausedAt)?m.pausedAt:Date.now();
+        job.pauseReason=m.type==='attempts-paused'?'attempts':'time';
+        job.continuationRequestId=m.type==='attempts-paused'?m.requestId:null;
+        if(m.detail?.counters){job.counters=m.detail.counters;job.pass=m.detail.counters.attempt?.current??job.pass;}
         clearTimeout(timer);timer=null;clearTimeout(watchdog);watchdog=null;
         if(job.activity)job.activity={...job.activity,visual:null,sequence:++activitySequence};
-        log("Paused. Add more time to pick up from here, or stop and keep the best checked result.");notify();return;
+        log(job.pauseReason==='attempts'?"Routing attempts used. Add more attempts, refine the best result, try flexible finishing, or end this run.":"Time’s up. Add time, refine the best result, try flexible finishing, or end this run.");notify();return;
       }
       job.lastEngineUpdateAt=Date.now();
       if(m.counters){job.counters=m.counters;job.pass=m.counters.attempt?.current??job.pass;}
@@ -514,7 +541,7 @@
         job.advice=m.advice||{items:[]};
         log('Loaded '+job.name+': '+m.stats.netCount+' nets, '+m.stats.unrouted+" connections left.");
         for(const w of m.warnings||[])log("Board note: "+w);
-        if(type==='run'&&job.state!=='stopping') {if(job.state==='pausing'||job.state==='paused')job.resumeState='running';else job.state='running';job.phase='routing';}
+        if(runLike&&job.state!=='stopping') {if(job.state==='pausing'||job.state==='paused')job.resumeState='running';else job.state='running';job.phase=type==='refine-best'?'optimizing':type==='flexible-finish'?'flexible-finishing':'routing';}
       }
       if(m.type==='ready') {job.state=job.stopReason||'ready';job.phase=job.state;job.endedAt=Date.now();kill();if(type==='inspect'&&job.state==='ready'){job.ruleMatchFingerprint=typeof m.ruleMatchFingerprint==='string'&&/^[a-f0-9]{64}$/.test(m.ruleMatchFingerprint)?m.ruleMatchFingerprint:null;offerPreviousRules();}}
       if(m.type==='done') {
@@ -524,12 +551,12 @@
         log('Checked result: '+job.stats.unrouted+" connections left, "+(job.stats.totalViolations??job.stats.clearanceViolations)+' rule issues, '+job.stats.belowNominalWidthTraceCount+' undersized traces.');
         kill();
       }
-      if(m.type==='error') {freezeRunReport('error');if(['NET_LAYER_CONFLICT','VIA_IN_PAD_CONFLICT'].includes(m.code)&&bestChecked?.fromInput){board=bestChecked.board;preview=bestChecked.preview;exports=bestChecked.exports;job.stats={...bestChecked.stats};job.routingSummary=routingSummary(board);updateLayerRules();job.advice=bestChecked.advice;job.hasOutput=true;job.revision++;}job.state='error';job.phase='error';job.error=m.error;job.endedAt=Date.now();log('Error: '+m.error);if(m.stack)log(m.stack);kill();}
+      if(m.type==='error') {job.error=m.error;stopWithBest('error','This step stopped: '+m.error);return;}
       notify();
     };
-    worker.onerror=e=>{if(id!==serial||!job||!active.has(job.state))return;const message=e.message||"Routing couldn’t start. Try the latest Chrome, Edge or Firefox.";if(clearing){restoreBeforeClear("Couldn’t clear routing: "+message,message);return;}if(editingRules){restoreBeforeRules("Couldn’t update routing rules: "+message,message);return;}if(editingScale){restoreBeforeScale("Couldn’t update board scale: "+message,message);return;}freezeRunReport('error');job.error=message;job.state='error';job.phase='error';job.endedAt=Date.now();log(job.error);kill();notify();};
-    try {worker.postMessage({type,text:inputText,name:job.name,options,changes,...(editingScale?{board:saved.board,profile:changes}:{}),environment:job.benchmarkEnvironment,deadlineAt:job.deadlineAt,budgetGeneration:job.budgetGeneration});}
-    catch(error) {if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);if(editingScale)restoreBeforeScale("Couldn’t update board scale: "+error.message,error.message);throw error;}
+    worker.onerror=e=>{if(id!==serial||!job||!active.has(job.state))return;const message=e.message||"Routing couldn’t start. Try the latest Chrome, Edge or Firefox.";if(clearing){restoreBeforeClear("Couldn’t clear routing: "+message,message);return;}if(editingRules){restoreBeforeRules("Couldn’t update routing rules: "+message,message);return;}if(editingScale){restoreBeforeScale("Couldn’t update board scale: "+message,message);return;}job.error=message;stopWithBest('error','This step stopped: '+message);};
+    try {worker.postMessage({type,text:inputText,name:job.name,options,changes,...(bestAction?{seedBoard:seed.board,seedFromInput:seed.fromInput}:{}),...(editingScale?{board:saved.board,profile:changes}:{}),environment:job.benchmarkEnvironment,deadlineAt:job.deadlineAt,budgetGeneration:job.budgetGeneration});}
+    catch(error) {if(clearing)restoreBeforeClear("Couldn’t clear routing: "+error.message,error.message);if(editingRules)restoreBeforeRules("Couldn’t update routing rules: "+error.message,error.message);if(editingScale)restoreBeforeScale("Couldn’t update board scale: "+error.message,error.message);if(bestAction){job.error=error.message;stopWithBest('error',"Couldn’t start this step.");}throw error;}
     armBudgetTimer(id);
     notify();return state();
   }
@@ -617,17 +644,49 @@
     }
     if(endpoint==='/api/extend'){
       if(String(options.method||'GET').toUpperCase()!=='POST')throw new Error("More time wasn’t added. Use Extend time to try again.");
-      if(!job||job.operation!=='run'||!worker||!['pausing','paused'].includes(job.state))throw new Error("This run isn’t paused for more time.");
+      if(!job||!routingOperations.has(job.operation)||!worker||!['pausing','paused'].includes(job.state)||job.pauseReason==='attempts')throw new Error("This run isn’t paused for more time.");
       if(typeof data?.jobId!=='string'||data.jobId!==job.id)throw new Error("The run changed. Check the current run before adding more time.");
+      if(data.budgetGeneration!==undefined&&data.budgetGeneration!==job.budgetGeneration)throw new Error('The pause changed. Check the current run before adding more time.');
       const minutes=data.timeoutMinutes;
       if(!Number.isInteger(minutes)||minutes<1||minutes>1440)throw new Error("Choose a whole number from 1 to 1,440 minutes to add.");
       const now=Date.now();
       if(job.runReport&&job.benchmarkPauseReceivedAt!==null&&job.benchmarkPauseReceivedAt!==undefined)job.runReport.timing={...job.runReport.timing,pausedMs:job.runReport.timing.pausedMs+Math.max(0,performance.now()-job.benchmarkPauseReceivedAt)};
       job.benchmarkPauseReceivedAt=null;
       if(job.pausedAt){job.pausedDurationMs+=now-job.pausedAt;job.pausedAt=null;}
-      job.budgetGeneration++;job.deadlineAt=now+minutes*60000;job.state=job.resumeState==='starting'?'starting':'running';job.resumeState=null;
+      job.budgetGeneration++;job.deadlineAt=now+minutes*60000;job.state=job.resumeState==='starting'?'starting':'running';job.resumeState=null;job.pauseReason=null;
       worker.postMessage({type:'extend-budget',generation:job.budgetGeneration,deadlineAt:job.deadlineAt});
       armBudgetTimer(serial);log('Added '+minutes+" minutes. Picking up from where this run paused.");notify();return state();
+    }
+    if(endpoint==='/api/extend-attempts'){
+      if(String(options.method||'GET').toUpperCase()!=='POST')throw new Error('Use Add attempts to continue this run.');
+      if(!job||job.operation!=='run'||!worker||job.state!=='paused'||job.pauseReason!=='attempts')throw new Error('This run is not waiting for more routing attempts.');
+      if(data?.jobId!==job.id||typeof data.continuationRequestId!=='string'||data.continuationRequestId!==job.continuationRequestId)throw new Error('The pause changed. Check the current run before adding attempts.');
+      const attempts=data.extraAttempts,minutes=data.timeoutMinutes;
+      if(!Number.isInteger(attempts)||attempts<1||attempts>100)throw new Error('Choose a whole number from 1 to 100 attempts to add.');
+      if(minutes!==undefined&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose a whole number from 1 to 1,440 extra minutes.');
+      const now=Date.now(),budgetLeft=Math.max(0,job.deadlineAt-(job.pausedAt||now)),requestId=job.continuationRequestId;
+      if(job.runReport&&job.benchmarkPauseReceivedAt!==null&&job.benchmarkPauseReceivedAt!==undefined)job.runReport.timing={...job.runReport.timing,pausedMs:job.runReport.timing.pausedMs+Math.max(0,performance.now()-job.benchmarkPauseReceivedAt)};
+      job.benchmarkPauseReceivedAt=null;if(job.pausedAt){job.pausedDurationMs+=now-job.pausedAt;job.pausedAt=null;}
+      job.extendedAttempts=true;if(job.runReport)job.runReport={...job.runReport,protocol:'normal-v1',workloadFingerprint:null,settings:{...job.runReport.settings,benchmarkMode:false}};
+      job.budgetGeneration++;job.deadlineAt=now+budgetLeft+(minutes||0)*60000;job.state='running';job.resumeState=null;job.pauseReason=null;job.continuationRequestId=null;
+      worker.postMessage({type:'extend-attempts',requestId,extraAttempts:attempts,extraTimeMs:(minutes||0)*60000,generation:job.budgetGeneration,deadlineAt:job.deadlineAt});
+      armBudgetTimer(serial);log('Added '+attempts+' routing attempts. Continuing this run with its current work and best result.');notify();return state();
+    }
+    if(endpoint==='/api/refine-best'||endpoint==='/api/flexible-finish'){
+      if(String(options.method||'GET').toUpperCase()!=='POST')throw new Error('Choose a current best result action to continue.');
+      requireRuleDecision();
+      if(!job||data?.jobId!==job.id)throw new Error('The board changed. Check the current best result and try again.');
+      if(active.has(job.state)&&!['pausing','paused'].includes(job.state))throw new Error('Pause or stop the current step before working on the best result.');
+      if(!bestChecked?.board||!bestChecked.stats?.drcChecked||!bestChecked.stats?.widthRulesChecked)throw new Error('There is no checked result to work on yet.');
+      if(data.continuationRequestId!==undefined&&data.continuationRequestId!==job.continuationRequestId)throw new Error('The pause changed. Choose the current best result again.');
+      if(data.budgetGeneration!==undefined&&data.budgetGeneration!==job.budgetGeneration)throw new Error('The pause changed. Choose the current best result again.');
+      const flexible=endpoint==='/api/flexible-finish';
+      const remainingLinks=bestChecked.stats.remainingPadLinks??hostGeometry.connectivity(bestChecked.board,{airwires:false}).components.reduce((sum,component)=>sum+Math.max(0,component.groups.filter(group=>group.pads?.length).length-1),0);
+      if(flexible&&(!Number.isInteger(remainingLinks)||remainingLinks<1||remainingLinks>4))throw new Error('Flexible finishing works on one to four remaining pad connections.');
+      if(flexible&&typeof createRamenFlexibleFinisher!=='function')throw new Error('Flexible finishing is not available in this copy. Keep the app files together and reopen it.');
+      const settings=getSettings({...job.settings,viaInPad:!!bestChecked.board.viaAtSmd,refinementMode:flexible?'flexible':'refine'});
+      log(flexible?'Trying flexible finishing on the best checked result.':'Refining the best checked result.');
+      return launch(flexible?'flexible-finish':'refine-best',settings);
     }
     if(endpoint==='/api/clear-routing') {
       if(String(options.method||'GET').toUpperCase()!=='POST')throw new Error("Routing wasn’t cleared. Use Clear routing & start over and confirm to try again.");
@@ -663,6 +722,6 @@
     const {blob,filename}=getDownload(type),url=URL.createObjectURL(blob),a=document.createElement('a');
     a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);return filename;
   }
-  globalThis.RamenNative={request,download,setBenchmarkEnvironment(value){if(typeof value?.animationEnabled!=='boolean')return;benchmarkEnvironment={animationEnabled:value.animationEnabled};if(job?.operation==='run'&&active.has(job.state)&&job.benchmarkEnvironment){if(job.benchmarkEnvironment.animationEnabled!==value.animationEnabled)job.benchmarkEnvironment.animationChanged=true;job.benchmarkEnvironment.animationEnabled=value.animationEnabled;if(job.runReport)job.runReport.environment={...job.runReport.environment,...job.benchmarkEnvironment};}},subscribeActivity(fn){activitySubscribers.add(fn);return()=>activitySubscribers.delete(fn);},subscribe(fn){subscribers.add(fn);return()=>subscribers.delete(fn);}};
+  globalThis.RamenNative={request,download,setBenchmarkEnvironment(value){if(typeof value?.animationEnabled!=='boolean')return;benchmarkEnvironment={animationEnabled:value.animationEnabled};if(routingOperations.has(job?.operation)&&active.has(job.state)&&job.benchmarkEnvironment){if(job.benchmarkEnvironment.animationEnabled!==value.animationEnabled)job.benchmarkEnvironment.animationChanged=true;job.benchmarkEnvironment.animationEnabled=value.animationEnabled;if(job.runReport)job.runReport.environment={...job.runReport.environment,...job.benchmarkEnvironment};}},subscribeActivity(fn){activitySubscribers.add(fn);return()=>activitySubscribers.delete(fn);},subscribe(fn){subscribers.add(fn);return()=>subscribers.delete(fn);}};
   window.addEventListener('beforeunload',event=>{if(job&&active.has(job.state)){event.preventDefault();event.returnValue='';}});
 })();

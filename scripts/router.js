@@ -4,6 +4,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
   const G=geometry, SQRT2=Math.SQRT2, EPS=1e-7;
   const copy=o=>JSON.parse(JSON.stringify(o));
   const yieldNow=typeof yieldTask==='function'?yieldTask:()=>new Promise(r=>setTimeout(r,0));
+  const flexibleFinisher=typeof globalThis.createRamenFlexibleFinisher==='function'?globalThis.createRamenFlexibleFinisher(G,yieldTask):null;
   const length=t=>t.points.slice(1).reduce((s,p,i)=>s+Math.hypot(p[0]-t.points[i][0],p[1]-t.points[i][1]),0);
   function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let x=Math.imul(seed^seed>>>15,1|seed);x=x+Math.imul(x^x>>>7,61|x)^x;return((x^x>>>14)>>>0)/4294967296;};}
   function shuffled(a,random){a=a.slice();for(let i=a.length-1;i>0;i--){let j=Math.floor(random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
@@ -25,6 +26,110 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     push(node,cost){let i=this.nodes.length;this.nodes.push(node);this.costs.push(cost);while(i){let p=(i-1)>>1;if(this.costs[p]<=cost)break;this.nodes[i]=this.nodes[p];this.costs[i]=this.costs[p];i=p;}this.nodes[i]=node;this.costs[i]=cost;}
     pop(){if(!this.nodes.length)return null;let n=this.nodes[0],f=this.costs[0],last=this.nodes.pop(),cost=this.costs.pop();if(this.nodes.length){let i=0;while(true){let l=i*2+1;if(l>=this.nodes.length)break;let r=l+1,c=r<this.nodes.length&&this.costs[r]<this.costs[l]?r:l;if(this.costs[c]>=cost)break;this.nodes[i]=this.nodes[c];this.costs[i]=this.costs[c];i=c;}this.nodes[i]=last;this.costs[i]=cost;}return[n,f];}
   }
+  const checkedRuleKeys=['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'];
+  const noRuleRegression=(candidate,reference)=>checkedRuleKeys.every(key=>candidate[key]<=reference[key]);
+  const missingPadLinks=connection=>connection.components.reduce((sum,component)=>sum+Math.max(0,component.groups.filter(group=>group.pads.length>0).length-1),0);
+  function preservesPadPartitions(before,after){
+    const groups=new Map();
+    for(const component of after.components)for(const group of component.groups)for(const pad of group.pads)groups.set(String(component.net)+'\0'+pad,group);
+    for(const component of before.components)for(const group of component.groups){
+      const connected=group.pads.map(pad=>groups.get(String(component.net)+'\0'+pad));
+      if(connected.some(group=>!group)||connected.some(group=>group!==connected[0]))return false;
+    }
+    return true;
+  }
+  function preservesModelRules(candidate,reference){
+    return ['pads','nets','layers','units','bounds','boundary','outlines','fills','copperFills','keepouts','viaKeepouts','viaDefs','viaAtSmd','viaInPadApplied','viaInPadOverride','defaultWidth','defaultClearance','defaultViaName','classClearances','crossClassClearance','clearanceMode','structureClearance','edgeClearance'].every(key=>JSON.stringify(candidate[key])===JSON.stringify(reference[key]));
+  }
+  const protectedCopper=item=>item.fixed||item.protected||item.locked||item.preserve||item.fanout||item.attachment||['fix','fixed','protect','protected'].includes(item.type)||['fix','protect'].includes(item._dsnType);
+  function preservesProtectedCopper(candidate,reference){
+    for(const key of ['traces','vias']){
+      const counts=new Map();for(const item of candidate[key]||[]){const signature=JSON.stringify(item);counts.set(signature,(counts.get(signature)||0)+1);}
+      for(const item of (reference[key]||[]).filter(protectedCopper)){const signature=JSON.stringify(item),count=counts.get(signature)||0;if(!count)return false;counts.set(signature,count-1);}
+    }
+    return true;
+  }
+  function copperIdentity(board,kind,index){const key={pad:'pads',trace:'traces',via:'vias',fill:'copperFills'}[kind];return JSON.stringify([kind,key&&board[key]?.[index]]);}
+  function preservesProtectedConnections(reference,before,candidate,after){
+    const members=(board,group)=>new Set([...group.pads.map(id=>'pad:'+id),...group.items.filter(item=>{const key={trace:'traces',via:'vias',fill:'copperFills'}[item.kind];return key&&protectedCopper(board[key]?.[item.index]||{});}).map(item=>copperIdentity(board,item.kind,item.index))]);
+    const groups=new Map(after.components.map(component=>[String(component.net),component.groups.map(group=>members(candidate,group))]));
+    for(const component of before.components)for(const group of component.groups){
+      const required=members(reference,group);if(![...required].some(id=>!id.startsWith('pad:')))continue;
+      if(!groups.get(String(component.net))?.some(next=>[...required].every(id=>next.has(id))))return false;
+    }
+    return true;
+  }
+  // Geometric identities survive deletion/reindexing. A moved object with a
+  // remaining violation must be checked afresh, rather than inheriting an
+  // unrelated input conflict merely because the violation count stayed equal.
+  function noNewRuleViolations(reference,before,candidate,after){
+    const issueKey=(issue,board,width=false)=>{
+      const pair=issue.a&&issue.b?[copperIdentity(board,issue.a.kind,issue.a.index),copperIdentity(board,issue.b.kind,issue.b.index)].sort():null;
+      const kind=width?'trace':issue.kind||(issue.index!==undefined?'via':null),object=kind&&issue.index!==undefined?copperIdentity(board,kind,issue.index):null;
+      return JSON.stringify([width?'width':issue.type,issue.layer,issue.net,issue.pad,issue.padstack,issue.keepout,pair,object,issue.via===undefined?null:copperIdentity(board,'via',issue.via)]);
+    };
+    const match=(oldIssues,newIssues,width)=>{
+      const known=new Map();for(const issue of oldIssues||[]){const key=issueKey(issue,reference,width);if(!known.has(key))known.set(key,[]);known.get(key).push(issue);}
+      for(const issue of newIssues||[]){const old=known.get(issueKey(issue,candidate,width))?.pop();if(!old)return false;
+        if(Number.isFinite(issue.actual)&&Number.isFinite(old.actual)&&issue.actual<old.actual-EPS)return false;
+        if(Number.isFinite(issue.required)&&Number.isFinite(old.required)&&issue.required>old.required+EPS)return false;
+      }
+      return true;
+    };
+    return match(before.violations,after.violations,false)&&match(before.widthDeviations,after.widthDeviations,true);
+  }
+  // Explicit refinement works directly on a checked model. It never starts
+  // the full-board routing loop or reparses an export into a new input prefix.
+  async function refineCurrentBest(input,options={},emit=()=>{},isCancelled=()=>false){
+    const measurement=yieldTask?.measurement,finish=measurement?.begin('refining'),log=[];
+    const mode=options.refinementMode==='flexible'?'flexible':'refine',phase=mode==='flexible'?'finishing':'optimizing';
+    const counters={attempt:{current:0,limit:0,completed:0,status:'skipped'},refinement:{current:0,limit:mode==='refine'?1:0,completed:0,status:mode==='refine'?'pending':'skipped'},repair:{current:0,limit:mode==='flexible'?1:0,completed:0,status:mode==='flexible'?'pending':'skipped'},work:null};
+    const counterSnapshot=()=>copy(counters),reportWork=work=>{if(isCancelled())return;counters.work={...work};emit({type:'progress',phase,log:false,counters:counterSnapshot()});};
+    const reports=new WeakMap();
+    function check(board){const done=measurement?.begin('checking');try{
+      const connection=G.connectivity(board,{airwires:false}),validation=G.validate(board),short=new Set(board.nets.filter(n=>n.preferShort===true).map(n=>n.id));
+      const stats={unrouted:connection.unrouted,viaCount:board.vias.length,traceCount:board.traces.length,traceLengthMm:board.traces.reduce((sum,t)=>sum+length(t),0)*(board.units.mmPerUnit||1),...(short.size?{preferredTraceLengthMm:board.traces.reduce((sum,t)=>sum+(short.has(t.net)?length(t):0),0)*(board.units.mmPerUnit||1)}:{}),clearanceViolations:validation.clearanceViolations,totalViolations:validation.totalViolations,viaInPadViolations:validation.viaInPadViolations,outlineViolations:validation.outlineViolations,keepoutViolations:validation.keepoutViolations,drcChecked:true,belowNominalWidthTraceCount:validation.belowNominalWidthTraceCount||0,widthRulesChecked:true,netCount:board.nets.length,componentCount:new Set(board.pads.map(p=>p.component)).size,layerCount:board.layers.length};
+      reports.set(stats,validation);measurement?.observeChecked?.(stats);return{stats,connection};
+    }finally{done?.();}}
+    let best,bestStats,bestConnection;
+    const checkpoint=()=>emit({type:'checkpoint',phase,pass:0,board:copy(best),stats:bestStats,validation:copy(reports.get(bestStats)),counters:counterSnapshot()});
+    try{
+      best=copy(input);best.traces=best.traces||[];best.vias=best.vias||[];
+      const baseline=check(best),initialStats=baseline.stats;bestStats=initialStats;bestConnection=baseline.connection;
+      const retain=candidate=>{
+        if(!candidate)return false;
+        const checked=check(candidate),s=checked.stats;
+        const keys=initialStats.preferredTraceLengthMm===undefined?['unrouted','totalViolations','belowNominalWidthTraceCount','viaCount','traceLengthMm','traceCount']:['unrouted','totalViolations','belowNominalWidthTraceCount','preferredTraceLengthMm','viaCount','traceLengthMm','traceCount'];
+        let better=false;for(const key of keys){if(s[key]<bestStats[key]-EPS){better=true;break;}if(s[key]>bestStats[key]+EPS)break;}
+        const safe=noRuleRegression(s,bestStats)&&preservesModelRules(candidate,best)&&preservesProtectedCopper(candidate,best)&&preservesPadPartitions(bestConnection,checked.connection)&&preservesProtectedConnections(best,bestConnection,candidate,checked.connection)&&noNewRuleViolations(best,reports.get(bestStats),candidate,reports.get(s));
+        if(better&&safe){best=copy(candidate);bestStats=s;bestConnection=checked.connection;return true;}
+        if(!safe){const message='The refinement didn’t pass all the checks. Keeping the previous best.';log.push(message);emit({type:'progress',phase:'checking',message});}
+        return false;
+      };
+      let pendingCheckpoint=Promise.resolve();
+      const checkedEmit=message=>{
+        if(message?.type!=='checkpoint')return emit(message);
+        if(!retain(message.board||message.model))return;
+        const saved={type:'checkpoint',phase,pass:0,board:copy(best),stats:bestStats,validation:copy(reports.get(bestStats)),counters:counterSnapshot()};
+        pendingCheckpoint=pendingCheckpoint.then(()=>emit(saved));pendingCheckpoint.catch(()=>{});return pendingCheckpoint;
+      };
+      // This checked fallback exists before any mutable refinement work begins.
+      await checkpoint();await yieldNow();
+      const item=counters[mode==='flexible'?'repair':'refinement'];
+      const remainingLinks=missingPadLinks(baseline.connection);
+      const available=mode==='flexible'?flexibleFinisher&&remainingLinks>0&&remainingLinks<=4:optimizer;
+      if(!isCancelled()&&available){
+        item.current=1;item.status='running';emit({type:'progress',phase,message:mode==='flexible'?'Making room for the last few connections':'Refining the best checked route',counters:counterSnapshot()});
+        const result=mode==='flexible'?await flexibleFinisher.improveRoutingBest(copy(best),{...options,preserveTraceCount:0,preserveViaCount:0},checkedEmit,isCancelled,reportWork):await optimizer.optimize(copy(best),options,checkedEmit,isCancelled,reportWork);
+        const candidate=result?.model||result?.board||result;
+        await pendingCheckpoint;if(retain(candidate))await checkpoint();
+        if(!isCancelled())item.completed=1;
+      }else if(!isCancelled()&&mode==='flexible'){const message=remainingLinks>4?'Flexible finishing is for the last four connections.':remainingLinks===0?'All required connections are already routed.':'Flexible finishing isn’t available. Reload RamenRouter and try again.';log.push(message);emit({type:'progress',phase:'checking',message});}
+      item.status=isCancelled()?'stopped':item.current?'done':'skipped';counters.work=null;
+      emit({type:'progress',phase:'checking',board:copy(best),stats:bestStats,counters:counterSnapshot(),message:bestStats.unrouted+' connections left.'});
+      return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:isCancelled()};
+    }finally{finish?.();}
+  }
   async function route(input,options={},emit=()=>{},isCancelled=()=>false){
     const measurement=yieldTask?.measurement,finishRoute=measurement?.begin('routing');
     // Reports belong to checked statistics from this route only. A retained
@@ -32,14 +137,14 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const validationReports=new WeakMap();
     const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
-    const started=Date.now(),timeout=(options.timeoutMinutes||30)*60000,log=[];
-    const stopped=()=>isCancelled()||(!yieldTask?.managesBudget&&Date.now()-started>=timeout);
-    const attemptLimit=options.fanoutOnly?0:options.deepSearch===false?1:Math.max(1,Math.min(options.maxPasses||12,100));
+    const started=Date.now(),timeout=(options.timeoutMinutes||30)*60000,log=[];let deadline=started+timeout;
+    const stopped=()=>isCancelled()||(!yieldTask?.managesBudget&&Date.now()>=deadline);
+    let attemptLimit=options.fanoutOnly?0:options.deepSearch===false?1:Math.max(1,Math.min(options.maxPasses||12,100));
     // A larger attempt budget adds later stages; it must not postpone repair
     // of a promising layout reached by the ordinary twelve-attempt search.
-    const stageCount=Math.max(1,Math.ceil(attemptLimit/12));
-    const refinementLimit=options.fanoutOnly||options.optimize===false||!optimizer?0:(options.deepSearch===false?1:2)*stageCount;
-    const repairLimit=options.fanoutOnly||options.deepSearch===false?0:18*stageCount;
+    let stageCount=Math.max(1,Math.ceil(attemptLimit/12));
+    let refinementLimit=options.fanoutOnly||options.optimize===false||!optimizer?0:(options.deepSearch===false?1:2)*stageCount;
+    let repairLimit=options.fanoutOnly||options.deepSearch===false?0:18*stageCount;
     const counter=(limit,conditional)=>({current:0,limit,completed:0,status:limit?'pending':'skipped',...(conditional===undefined?{}:{conditional})});
     const counters={attempt:counter(attemptLimit),refinement:counter(refinementLimit,refinementLimit>1),repair:counter(repairLimit,true),work:null};
     const counterSnapshot=()=>({attempt:{...counters.attempt},refinement:{...counters.refinement},repair:{...counters.repair},work:counters.work?{...counters.work}:null});
@@ -85,6 +190,15 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     const initialStats=stats(original),baseViolation=initialStats.clearanceViolations,baseWidth=initialStats.belowNominalWidthTraceCount,baseTotal=initialStats.totalViolations;
     if(options.viaInPad===false&&initialStats.viaInPadViolations){const error=new Error('Existing vias overlap SMD pads while vias in SMD pads are disabled. Clear routing & start over, or enable vias in SMD pads before routing.');error.code='VIA_IN_PAD_CONFLICT';throw error;}
     let originalStats=initialStats;
+    if(options.cleanupDangling===true&&optimizer?.cleanup&&!stopped()){
+      const before=connectivity(original);
+      say('Checking unused traces before routing',{phase:'checking'});
+      const cleaned=await optimizer.cleanup(copy(original),options,emit,stopped),candidate=cleaned?.board||cleaned;
+      if(candidate){const checked=stats(candidate),after=connectivity(candidate);
+        if(checked.unrouted<=originalStats.unrouted&&noRuleRegression(checked,originalStats)&&preservesModelRules(candidate,original)&&preservesProtectedCopper(candidate,original)&&preservesPadPartitions(before,after)&&preservesProtectedConnections(original,before,candidate,after)&&noNewRuleViolations(original,validationReports.get(originalStats),candidate,validationReports.get(checked))){original=candidate;originalStats=checked;if(cleaned.changed)say('Removed unused copper while keeping the existing connections.',{phase:'checking',board:copy(original),stats:checked});}
+        else say('Keeping your imported copper. The cleanup didn’t pass all the checks.',{phase:'checking'});
+      }
+    }
     const needsLayerAccess=original.pads.some(p=>{const net=rules.get(p.net);return net&&new Set(p.shapes.map(s=>s.layer)).size===1&&net.useLayers&&!net.useLayers.includes(p.shapes[0].layer);});
     if((options.fanout!==false||options.fanoutOnly||needsLayerAccess)&&fanout&&!stopped()){
       const accessOnly=options.fanout===false&&!options.fanoutOnly;
@@ -661,6 +775,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       }return{failed,ripped};}
     function distanceToTree(group,points){let best=Infinity;for(const p of group.points)for(const q of points)best=Math.min(best,Math.hypot(p[0]-q[0],p[1]-q[1]));return best;}
     function scoreBetter(a,b){if(a.totalViolations>baseTotal||a.clearanceViolations>baseViolation||a.belowNominalWidthTraceCount>baseWidth)return false;const key=s=>shortNets.size?[s.unrouted,s.totalViolations,s.belowNominalWidthTraceCount,s.preferredTraceLengthMm,s.viaCount,s.traceLengthMm]:[s.unrouted,s.viaCount,s.traceLengthMm];let ka=key(a),kb=key(b);for(let i=0;i<ka.length;i++){if(ka[i]<kb[i]-1e-8)return true;if(ka[i]>kb[i]+1e-8)return false;}return false;}
+    function safeRefinement(candidate,measured,reference=best,referenceStats=bestStats){
+      const before=connectivity(reference),after=connectivity(candidate);
+      return noRuleRegression(measured,referenceStats)&&preservesModelRules(candidate,reference)&&preservesProtectedCopper(candidate,reference)&&preservesPadPartitions(before,after)&&preservesProtectedConnections(reference,before,candidate,after)&&noNewRuleViolations(reference,validationReports.get(referenceStats),candidate,validationReports.get(measured));
+    }
     // Bounded complete-board restarts with difficult-net-first ordering and rip-up repair.
     let failures=new Set(),passes=attemptLimit,completeWithoutImprovement=0,routingDone=false;
     const completeOrders=new Set();
@@ -674,8 +792,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       return restored;
     }
     say("Routing grid: "+nx+' × '+ny+' grid, '+layerCount+' layers, '+step.toPrecision(3)+' '+original.units.name+' step.',{phase:'routing',pass:0,board:copy(best),stats:bestStats});
-    for(let stage=1;stage<=stageCount&&!stopped();stage++){
-    const stageEnd=Math.min(stage*12,passes);
+    let nextAttempt=1,stage=0;
+    while(nextAttempt<=passes&&!stopped()){
+    stage++;
+    const stageStart=nextAttempt,stageEnd=Math.min(stageStart+11,passes);
     const stageHasMore=()=>stageEnd<passes&&!routingDone&&!(bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0));
     // Refinement may shorten imported stubs or remove an unused imported via.
     // Rebuild and check the immutable routing prefix before another stage can
@@ -686,7 +806,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       workingSafe=workingStats.unrouted<=bestStats.unrouted&&['totalViolations','clearanceViolations','viaInPadViolations','outlineViolations','keepoutViolations','belowNominalWidthTraceCount'].every(key=>workingStats[key]<=bestStats[key]);
       if(!workingSafe){workingBest=original;say("Keeping the checked result. The next routing stage starts from your imported copper.",{phase:'checking'});}
     }
-    for(let pass=(stage-1)*12+1;pass<=stageEnd&&!stopped();pass++){
+    for(let pass=stageStart;pass<=stageEnd&&!stopped();pass++){
       let alternateOrder=null;
       if(shortNets.size&&bestStats.unrouted===0&&initialStats.unrouted>0){
         // Once complete, only try distinct full-board orders. A single routable
@@ -717,6 +837,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
         if(completeWithoutImprovement>=3){say("The selected nets didn’t get shorter in 3 complete-board attempts. Keeping the shortest checked result.",{phase:'routing'});routingDone=true;break;}
         if(pass<passes&&!stopped())say("All connections routed. Trying another order to shorten the selected nets.",{phase:'routing'});
       }
+      nextAttempt=pass+1;
       if(inaccessibleGroups.size&&!failures.size){routingDone=true;break;}
     }
     if(stageEnd>=passes||routingDone)finishCounter('attempt','routing');
@@ -726,7 +847,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
       emit({type:'progress',phase:'optimizing',message:'Refining the checked route'});
       const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork);let candidate=stats(optimized,true);
-      if(scoreBetter(candidate,bestStats)){best=optimized;bestStats=candidate;await checkpoint();}
+      if(scoreBetter(candidate,bestStats)&&safeRefinement(optimized,candidate)){best=optimized;bestStats=candidate;await checkpoint();}
       if(!stopped()){counters.refinement.completed++;counters.refinement.status=refinementLimit>1?'pending':'done';counters.work=null;reportCounters('optimizing');}
     }
     // A nearly complete large board can still have more than six local gaps.
@@ -808,16 +929,48 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
           counters.refinement.current++;counters.refinement.status='running';counters.work=null;reportCounters('optimizing');
           emit({type:'progress',phase:'optimizing',message:'Refining the repaired route'});
           const optimized=await optimizer.optimize(copy(best),refinementOptions,emit,stopped,refinementWork),measured=stats(optimized,true);
-          if(scoreBetter(measured,bestStats)){best=optimized;bestStats=measured;await checkpoint();}
+          if(scoreBetter(measured,bestStats)&&safeRefinement(optimized,measured)){best=optimized;bestStats=measured;await checkpoint();}
           if(!stopped()){counters.refinement.completed++;counters.refinement.status=stageHasMore()?'pending':'done';counters.work=null;reportCounters('optimizing');}
         }
       }else if(!safe)say("Keeping the checked route. Restoring the fanouts didn’t pass all the rule checks.",{phase:'checking'});
     }
+    if(options.flexibleFinishing===true&&flexibleFinisher&&bestStats.unrouted>0&&!stopped()){
+      const before=connectivity(best),remainingLinks=missingPadLinks(before);
+      if(remainingLinks>0&&remainingLinks<=4){
+        counters.repair.limit=Math.max(counters.repair.limit,counters.repair.completed+1);counters.repair.current=counters.repair.completed+1;counters.repair.status='running';counters.work=null;reportCounters('finishing');
+        const retain=candidate=>{if(!candidate)return false;const measured=stats(candidate,true);if(scoreBetter(measured,bestStats)&&safeRefinement(candidate,measured)){best=copy(candidate);bestStats=measured;return true;}return false;};
+        let pendingCheckpoint=Promise.resolve();
+        const checkedEmit=message=>{if(message?.type!=='checkpoint')return emit(message);if(!retain(message.board||message.model))return;const saved={type:'checkpoint',phase:'finishing',pass:counters.attempt.current,board:copy(best),stats:bestStats,validation:copy(validationReports.get(bestStats)),counters:counterSnapshot()};pendingCheckpoint=pendingCheckpoint.then(()=>emit(saved));pendingCheckpoint.catch(()=>{});return pendingCheckpoint;};
+        const result=await flexibleFinisher.improveRoutingBest(copy(best),{...options,preserveTraceCount:0,preserveViaCount:0},checkedEmit,stopped,work=>{if(stopped())return;counters.work={...work};reportCounters('finishing');}),candidate=result?.model||result?.board||result;
+        await pendingCheckpoint;if(retain(candidate))await checkpoint(counters.attempt.current,'finishing');
+        if(!stopped()){counters.repair.completed++;counters.repair.status='done';counters.work=null;reportCounters('finishing');}
+      }
+    }
     finishing=false;repairRound=0;congestionHistory=null;ripHistory.clear();
+    let continuationAccepted=false;
+    if(nextAttempt>passes&&bestStats.unrouted>0&&!stopped()&&typeof yieldTask?.requestContinuation==='function'){
+      await checkpoint(counters.attempt.current,'checking');
+      const remainingLinks=missingPadLinks(connectivity(best));
+      const askedAt=Date.now();
+      const choice=await yieldTask.requestContinuation({reason:'attempts',stats:copy(bestStats),initialStats:copy(initialStats),counters:counterSnapshot(),nextAttempt,remainingPadLinks:remainingLinks,canRefine:!!optimizer,canFlexibleFinish:!!flexibleFinisher&&remainingLinks>0&&remainingLinks<=4});
+      if(!yieldTask.managesBudget)deadline+=Date.now()-askedAt;
+      if(isCancelled())break;
+      if(choice?.action!=='continue')break;
+      const requested=Number(choice.extraAttempts);
+      if(!Number.isFinite(requested)||requested<1){say('No extra attempts added. Keeping the best checked result.',{phase:'checking'});break;}
+      const added=Math.min(100,Math.floor(requested));
+      passes+=added;attemptLimit=passes;stageCount=stage+Math.ceil(added/12);counters.attempt.limit=passes;
+      routingDone=false;continuationAccepted=true;
+      refinementLimit=Math.max(counters.refinement.limit,options.optimize===false||!optimizer?0:counters.refinement.completed+(options.deepSearch===false?1:2)*Math.ceil(added/12));
+      repairLimit=Math.max(counters.repair.limit,options.deepSearch===false?0:counters.repair.completed+18*Math.ceil(added/12));
+      counters.refinement.limit=refinementLimit;counters.refinement.conditional=refinementLimit>1;counters.repair.limit=repairLimit;counters.attempt.status='pending';
+      const extraTimeMs=Number(choice.extraTimeMs);if(!yieldTask.managesBudget&&Number.isFinite(extraTimeMs)&&extraTimeMs>0)deadline=Math.max(deadline,Date.now())+extraTimeMs;
+      say('Added '+added+' routing attempts. Continuing with attempt '+nextAttempt+'/'+passes+'.',{phase:'routing',counters:counterSnapshot()});
+    }
     if(routingDone||bestStats.unrouted===0&&(!shortNets.size||initialStats.unrouted===0))break;
     if(stageEnd<passes&&!stopped()){
       failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));
-      if(inaccessibleGroups.size&&!failures.size)break;
+      if(inaccessibleGroups.size&&!failures.size&&!continuationAccepted)break;
       for(const name of ['repair','refinement'])if(counters[name].limit)counters[name].status='pending';
       counters.work=null;reportCounters('routing');
       say('Continuing with routing attempt '+(stageEnd+1)+'/'+passes+" after checking the result kept so far.",{phase:'routing'});
@@ -829,7 +982,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     return{board:best,stats:bestStats,initialStats,log,counters:counterSnapshot(),stopped:stopped()};
     }finally{finishRoute?.();}
   }
-  return{route,layerDirections};
+  return{route,refineCurrentBest,layerDirections};
 }
 if(typeof globalThis!=='undefined')globalThis.createRamenRouter=createRamenRouter;
 if(typeof module!=='undefined'&&module.exports)module.exports={createRamenRouter};

@@ -4,6 +4,7 @@
   const $ = id => document.getElementById(id);
   const activeStates = new Set(['inspecting', 'clearing', 'updating_rules', 'updating_scale', 'starting', 'running', 'routing', 'fanout', 'optimizing', 'stopping', 'loading', 'pausing', 'paused']);
   const terminalStates = new Set(['completed', 'stopped', 'timed_out', 'error', 'failed']);
+  const routingOperations = new Set(['run', 'refine-best', 'flexible-finish']);
   const palette = ['#df9676', '#73c7c2', '#c1ab69', '#a394d3', '#83b76e', '#be86a6', '#73a0d0', '#a5b4bf'];
   const nativeEngine = globalThis.RamenNative;
   let currentState = null;
@@ -25,6 +26,7 @@
   let focusedAdvice = null;
   let dismissedStopJobId = null;
   let viewedStopJobId = null;
+  let pendingBestViewJobId = null;
   let announcedStopJobId = null;
   let budgetPromptJobId = null;
   let announcedBudgetKey = null;
@@ -111,10 +113,11 @@
     return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
   }
 
-  function phaseName(phase) { return ({ reading: 'Reading your board', checking: 'Checking routing rules', advising: 'Looking for placement changes that may help', exporting: 'Getting your exports ready', rasterizing: 'Mapping copper and clearances', loading: 'Loading your board', routing: 'Connecting pads', fanout: 'Finding room for pad escapes', optimizing: 'Refining routes', deep_search: 'Trying different routes', pad_escape: 'Finding a way out of the pads', finishing: 'Working on the remaining connections', updating_rules: 'Updating routing rules', updating_scale: 'Updating board scale' })[phase] || phase; }
+  function phaseName(phase) { return ({ reading: 'Reading your board', checking: 'Checking routing rules', advising: 'Looking for placement changes that may help', exporting: 'Getting your exports ready', rasterizing: 'Mapping copper and clearances', loading: 'Loading your board', routing: 'Connecting pads', fanout: 'Finding room for pad escapes', optimizing: 'Refining routes', deep_search: 'Trying different routes', pad_escape: 'Finding a way out of the pads', finishing: 'Working on the remaining connections', 'flexible-finishing': 'Trying small track shifts and bends', updating_rules: 'Updating routing rules', updating_scale: 'Updating board scale' })[phase] || phase; }
 
   function isActive() { return Boolean(currentState?.job && activeStates.has(currentState.job.state)); }
-  function awaitingMoreTime(job = currentState?.job) { return job?.operation === 'run' && ['pausing', 'paused'].includes(job.state); }
+  function awaitingMoreTime(job = currentState?.job) { return routingOperations.has(job?.operation) && ['pausing', 'paused'].includes(job.state); }
+  function remainingPadLinks(job = currentState?.job) { return job?.bestResult?.remainingPadLinks ?? job?.stats?.remainingPadLinks ?? job?.bestResult?.unrouted; }
 
   function outputAvailable(type) {
     const output = currentState?.job?.hasOutput;
@@ -322,10 +325,11 @@
     if (busy) hint = 'Preparing your board…';
     if (previousRulesPending) hint = 'Choose your routing rules before starting.';
     if (stopping) hint = forcedStop ? 'Stopping now…' : 'Finishing this step, then stopping…';
-    if (awaitingMoreTime(job)) hint = job.state === 'paused' ? 'Extend the time to continue this run, or stop.' : 'Finishing this step before pausing. You can add time now.';
+    if (awaitingMoreTime(job)) hint = job.pauseReason === 'attempts' ? 'Add attempts, refine the current best, try flexible finishing, or end this run.' : (job.state === 'paused' ? 'Add time, work on the current best, or end this run.' : 'Finishing this step before pausing. You can add time now.');
     if (!connected) hint = 'Waiting for RamenRouter to get ready.';
     $('runHint').textContent = hint;
     updateStoppedFeedback();
+    updateBestActions();
     updateBudgetFeedback();
     updateViaSuggestion();
     updateDirectionSuggestion();
@@ -369,20 +373,28 @@
 
   function updateBudgetFeedback() {
     const job = currentState?.job, show = awaitingMoreTime(job);
+    const attempts = show && job.pauseReason === 'attempts', checked = !!job?.bestResult?.available, links = remainingPadLinks(job);
     $('timeBudgetPrompt').hidden = !show;
-    for (const id of ['extraTimeMinutes', 'extendTimeButton', 'finishTimedRun']) $(id).disabled = !show || !connected || busy;
+    $('extraAttemptsLabel').hidden = !attempts; $('extendAttemptsButton').hidden = !attempts; $('extendTimeButton').hidden = attempts;
+    for (const id of ['extraTimeMinutes', 'extraAttempts', 'extendTimeButton', 'extendAttemptsButton', 'finishTimedRun']) $(id).disabled = !show || !connected || busy;
+    $('refinePausedBest').disabled = !show || !connected || busy || !checked;
+    $('flexiblePausedFinish').disabled = !show || !connected || busy || !checked || !(links > 0 && links <= 4);
     if (!show) return;
-    if (budgetPromptJobId !== job.id) {
-      budgetPromptJobId = job.id;
+    const promptKey = `${job.id}:${job.pauseReason}:${job.continuationRequestId || job.budgetGeneration || 0}`;
+    if (budgetPromptJobId !== promptKey) {
+      budgetPromptJobId = promptKey;
       const minutes = job.settings?.timeoutMinutes;
-      $('extraTimeMinutes').value = Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440 ? minutes : 30;
+      $('extraTimeMinutes').value = attempts ? 0 : (Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440 ? minutes : 30);
+      $('extraAttempts').value = Math.min(100, Math.max(1, job.settings?.maxPasses || 12));
     }
-    $('timeBudgetTitle').textContent = job.state === 'paused' ? 'Continue this run?' : 'Time limit reached';
-    $('timeBudgetDetail').textContent = job.state === 'paused'
-      ? 'Your work is paused, including any board preparation. Add time to pick up where it stopped, or end this run.'
-      : 'Finishing this step before pausing. Add time to keep going, including any board preparation already underway.';
-    $('finishTimedRun').textContent = job.bestResult?.available ? 'Keep best & stop' : 'Stop routing';
-    $('timeBudgetStopDetail').textContent = job.bestResult?.available ? 'Stop here and keep the best checked result to review or export.' : 'There is no checked result yet. Stop here to end this run.';
+    $('extraTimeMinutes').min = attempts ? '0' : '1'; $('extraTimeMinutes').required = !attempts;
+    $('extraTimeLabel').textContent = attempts ? 'Extra time, if needed' : 'Extra time';
+    $('timeBudgetTitle').textContent = attempts ? 'Routing attempts used' : (job.state === 'paused' ? 'Time limit reached' : 'Pausing at the time limit');
+    $('timeBudgetDetail').textContent = attempts
+      ? 'The current work is paused. Add attempts to keep the same search going, or work on its best checked result.'
+      : (job.state === 'paused' ? 'The current work is paused. Add time to continue here, or try a finishing step on the best checked result.' : 'Finishing this step before pausing. You can add time now, or choose the best checked result.');
+    $('finishTimedRun').textContent = checked ? 'End & show best' : 'Stop routing';
+    $('timeBudgetStopDetail').textContent = !checked ? 'There is no checked result yet. Stop here to end this run.' : links > 4 ? 'Refinement tidies the current best. Flexible finishing is available for the last four pad connections. End here to review or export the best result.' : 'Refinement tidies the current best. Flexible finishing tries small track shifts and bends without moving components. End here to review or export the best result.';
     const key = `budget:${job.id}:${job.budgetGeneration || 0}`;
     if (announcedBudgetKey !== key) {
       announcedBudgetKey = key;
@@ -398,8 +410,40 @@
     acknowledgeAttention();
     busy = true; updateControls();
     try {
-      await post('/api/extend', { jobId: job.id, timeoutMinutes });
+      await post('/api/extend', { jobId: job.id, budgetGeneration: job.budgetGeneration, timeoutMinutes });
       toast(`Added ${number(timeoutMinutes)} ${timeoutMinutes === 1 ? 'minute' : 'minutes'}. Picking up the same run.`);
+    } catch (error) { toast(error.message, true); }
+    finally { busy = false; updateControls(); }
+  }
+
+  async function extendRoutingAttempts() {
+    const job = currentState?.job;
+    if (busy || !connected || !awaitingMoreTime(job) || job.pauseReason !== 'attempts' || !$('extraAttempts').reportValidity() || !$('extraTimeMinutes').reportValidity()) return;
+    const extraAttempts = Number($('extraAttempts').value), minutes = Number($('extraTimeMinutes').value);
+    acknowledgeAttention(); busy = true; updateControls();
+    try {
+      await post('/api/extend-attempts', { jobId: job.id, continuationRequestId: job.continuationRequestId, extraAttempts, ...(minutes > 0 ? {timeoutMinutes: minutes} : {}) });
+      toast(`Added ${number(extraAttempts)} routing ${extraAttempts === 1 ? 'attempt' : 'attempts'}. Continuing the same run.`);
+    } catch (error) { toast(error.message, true); }
+    finally { busy = false; updateControls(); }
+  }
+
+  function updateBestActions() {
+    const job = currentState?.job, show = !!job?.bestResult?.available && !isActive();
+    const links = remainingPadLinks(job), eligible = links > 0 && links <= 4;
+    $('currentBestActions').hidden = !show;
+    $('refineBestButton').disabled = !show || !connected || busy;
+    $('flexibleFinishButton').disabled = !show || !connected || busy || !eligible;
+    $('currentBestFinishNote').textContent = eligible ? 'Flexible finishing tries small bends and shifts in movable tracks. It keeps your components and rules in place.' : links === 0 ? 'All required pad connections are routed. Refinement can still tidy the routes.' : 'Flexible finishing is available when four or fewer pad connections remain.';
+  }
+
+  async function workOnBest(flexible = false) {
+    const job = currentState?.job;
+    if (busy || !connected || !job?.bestResult?.available || (isActive() && !awaitingMoreTime(job))) return;
+    if (flexible && !(remainingPadLinks(job) > 0 && remainingPadLinks(job) <= 4)) return;
+    acknowledgeAttention(); busy = true; updateControls();
+    try {
+      await post(flexible ? '/api/flexible-finish' : '/api/refine-best', { jobId: job.id, ...(awaitingMoreTime(job) ? {budgetGeneration: job.budgetGeneration, ...(job.pauseReason === 'attempts' ? {continuationRequestId: job.continuationRequestId} : {})} : {}) });
     } catch (error) { toast(error.message, true); }
     finally { busy = false; updateControls(); }
   }
@@ -408,9 +452,10 @@
     if (busy || !connected || !awaitingMoreTime()) return;
     acknowledgeAttention();
     busy = true; updateControls();
+    const jobId = currentState.job.id; pendingBestViewJobId = jobId;
     try { await post('/api/stop'); }
-    catch (error) { toast(error.message, true); }
-    finally { busy = false; updateControls(); }
+    catch (error) { if (pendingBestViewJobId === jobId) pendingBestViewJobId = null; toast(error.message, true); }
+    finally { busy = false; updateControls(); if (pendingBestViewJobId === jobId) viewBestResult(); }
   }
 
   function stoppedResultAvailable() {
@@ -446,6 +491,7 @@
   function viewBestResult() {
     const job = currentState?.job;
     if (!stoppedResultAvailable() || !board || boardKey !== currentBoardKey() || busy) return;
+    pendingBestViewJobId = null;
     acknowledgedAttention.add(`stopped:${job.id}`);
     dismissedStopJobId = job.id;
     viewedStopJobId = job.id;
@@ -738,7 +784,7 @@
 
   function updateRunProgress() {
     const job = activityJob();
-    const show = job?.operation === 'run';
+    const show = routingOperations.has(job?.operation);
     $('runProgress').hidden = !show;
     if (!show) { stopProgressClock(); return; }
     const ended = Number.isFinite(job.endedAt) || terminalStates.has(job.state);
@@ -755,7 +801,7 @@
     else if (Number.isFinite(job.remainingSeconds)) left = Math.max(0, job.remainingSeconds);
     else if (Number.isFinite(job.deadlineAt) && Number.isFinite(job.endedAt)) left = Math.max(0, (job.deadlineAt - job.endedAt) / 1000);
     progressText('timeLeftValue', left === null ? '—' : seconds(Math.ceil(left)));
-    progressText('timeLeftDetail', ended ? 'Time left when this run ended' : (waiting ? (job.state === 'paused' ? 'Paused · choose more time or stop' : 'Finishing this step before pausing') : (left === 0 ? 'Time limit reached · pausing' : 'Time allowed for this run')));
+    progressText('timeLeftDetail', ended ? 'Time left when this run ended' : (waiting ? (job.state === 'paused' ? 'Paused · choose what to try next' : 'Finishing this step before pausing') : (left === 0 ? 'Time limit reached · pausing' : 'Time allowed for this run')));
     $('timeLeftProgress').classList.toggle('time-low', running && left !== null && left <= 60);
     if (Number.isFinite(job.startedAt) && (!ended || Number.isFinite(job.endedAt))) progressText('elapsedValue', seconds(Math.max(0, ((ended ? job.endedAt : (Number.isFinite(job.pausedAt) ? job.pausedAt : Date.now())) - job.startedAt - (job.pausedDurationMs || 0)) / 1000)));
     const work = job.counters?.work;
@@ -780,10 +826,10 @@
     document.querySelector('.activity-panel').classList.toggle('has-live-activity', active);
     if (active) {
       const waiting = awaitingMoreTime(job);
-      const message = waiting ? (job.state === 'paused' ? 'Time is up. Add time to continue where this run paused, or stop here.' : 'Time is up. Finishing this step before pausing. You can add time now.') : (job?.activity?.message || (job?.state === 'stopping' ? 'Finishing this step, then stopping.' : 'Working on the next step.'));
+      const message = waiting ? (job.pauseReason === 'attempts' ? 'Routing attempts used. Add attempts or choose a finishing step on the current best.' : (job.state === 'paused' ? 'Time is up. Add time or choose a finishing step on the current best.' : 'Time is up. Finishing this step before pausing. You can add time now.')) : (job?.activity?.message || (job?.state === 'stopping' ? 'Finishing this step, then stopping.' : 'Working on the next step.'));
       if ($('engineActivityMessage').textContent !== message) $('engineActivityMessage').textContent = message;
       const age = Number.isFinite(job.lastEngineUpdateAt) ? Math.max(0, Math.floor((Date.now() - job.lastEngineUpdateAt) / 1000)) : null;
-      $('engineActivityAge').textContent = waiting ? (job.state === 'paused' ? 'Work kept · add time or stop here' : 'Finishing the current step before pausing') : (age === null ? 'Waiting for the first routing update' : (age < 2 ? 'Updated just now' : `Last routing update ${number(age)} s ago`));
+      $('engineActivityAge').textContent = waiting ? (job.state === 'paused' ? 'Work kept · choose what to try next' : 'Finishing the current step before pausing') : (age === null ? 'Waiting for the first routing update' : (age < 2 ? 'Updated just now' : `Last routing update ${number(age)} s ago`));
       $('engineActivity').classList.toggle('awaiting-update', !waiting && (age === null || age >= 10));
       $('engineActivityAge').title = !waiting && age !== null && age >= 10 ? 'This step has not sent another update yet. You can still choose Stop routing.' : '';
     }
@@ -826,7 +872,7 @@
     const hasJob = Boolean(job && job.state !== 'idle');
     const active = isActive();
     if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules', 'updating_scale'].includes(job.state) && !['clearing', 'updating_rules', 'updating_scale'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
-      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
+      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
       for (const key of ['maxPasses', 'timeoutMinutes']) if (typeof job.settings[key] === 'number') $(key).value = job.settings[key];
     }
     if (job?.state === 'stopping') stoppingSince ??= Date.now();
@@ -842,6 +888,7 @@
     }
     const completedWithRuleIssues = job?.state === 'completed' && (job.stats?.totalViolations ?? job.stats?.clearanceViolations ?? 0) > 0;
     $('stateTitle').textContent = job?.state === 'completed' && job.stats?.unrouted > 0 ? 'Connections remain' : (completedWithRuleIssues ? 'Check the rule issues' : (labels[job?.state] || (job?.state ? job.state : 'Ready when you are')));
+    if (job?.state === 'paused' && job.pauseReason === 'attempts') $('stateTitle').textContent = 'Paused · routing attempts used';
     $('phaseLabel').textContent = phaseName(job?.phase) || (hasJob ? 'Choose settings and start routing' : 'No routing in progress');
     $('jobStateIcon').textContent = awaitingMoreTime(job) ? icons[job.state] : (active ? '⤳' : (completedWithRuleIssues ? '!' : (icons[job?.state] || '○')));
     $('jobState').className = `job-state ${active && !awaitingMoreTime(job) ? 'running' : (job?.state === 'error' || completedWithRuleIssues ? 'failed' : job?.state || '')}`;
@@ -861,6 +908,7 @@
       if ($('autoScroll').checked) $('logScroll').scrollTop = $('logScroll').scrollHeight;
     }
     if (hasJob && job.id !== lastJobId) {
+      if (pendingBestViewJobId !== job.id) pendingBestViewJobId = null;
       if (focusedAdvice) clearAdviceFocus();
       lastJobId = job.id;
       acknowledgedAttention.clear();
@@ -916,6 +964,7 @@
       if (bounds) parts.push(`${number(bounds[2] - bounds[0], 1)} × ${number(bounds[3] - bounds[1], 1)} mm`);
       $('geometrySummary').textContent = parts.join(' · ');
       if (fit || scaleChanged) fitBoard(); else draw();
+      if (pendingBestViewJobId === currentState?.job?.id && stoppedResultAvailable()) viewBestResult();
       updateControls();
       syncActivityVisual();
     } catch (error) {
@@ -1511,11 +1560,11 @@
   }
 
   function readRoutingOptions() {
-    return { deepSearch: $('deepSearch').checked, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
+    return { deepSearch: $('deepSearch').checked, flexibleFinishing: $('flexibleFinishing').checked, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
   }
 
   function writeRoutingOptions(settings) {
-    for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
+    for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
     for (const key of ['maxPasses', 'timeoutMinutes']) if (Number.isFinite(settings[key])) $(key).value = settings[key];
   }
 
@@ -1546,7 +1595,7 @@
   function restoreSettings() {
     try {
       const settings = JSON.parse(localStorage.getItem('ramenrouter.browser.settings.v1') || '{}');
-      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
+      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
       if (Number.isInteger(settings.maxPasses) && settings.maxPasses >= 1 && settings.maxPasses <= 100) $('maxPasses').value = settings.maxPasses;
       if (Number.isInteger(settings.timeoutMinutes) && settings.timeoutMinutes >= 1 && settings.timeoutMinutes <= 1440) $('timeoutMinutes').value = settings.timeoutMinutes;
     } catch {}
@@ -1862,7 +1911,7 @@
 
   function updateRunReportControls() {
     const job = currentState?.job;
-    const ready = Boolean(job?.runReport && terminalStates.has(job.state) && job.operation === 'run');
+    const ready = Boolean(job?.runReport && terminalStates.has(job.state) && routingOperations.has(job.operation));
     $('runReportButton').hidden = !ready;
     $('runReportButton').disabled = !ready || busy;
     // Preserve an already-open report as a snapshot; replacing the board does
@@ -2138,8 +2187,13 @@
   });
   $('viewBestResult').addEventListener('click', viewBestResult);
   $('extendTimeButton').addEventListener('click', () => void extendRoutingTime());
+  $('extendAttemptsButton').addEventListener('click', () => void extendRoutingAttempts());
+  $('refinePausedBest').addEventListener('click', () => void workOnBest());
+  $('flexiblePausedFinish').addEventListener('click', () => void workOnBest(true));
+  $('refineBestButton').addEventListener('click', () => void workOnBest());
+  $('flexibleFinishButton').addEventListener('click', () => void workOnBest(true));
   $('finishTimedRun').addEventListener('click', () => void finishTimedRun());
-  $('extraTimeMinutes').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void extendRoutingTime(); } });
+  for (const id of ['extraTimeMinutes', 'extraAttempts']) $(id).addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); if (currentState?.job?.pauseReason === 'attempts') void extendRoutingAttempts(); else void extendRoutingTime(); } });
   $('viewStoppedResult').addEventListener('click', viewBestResult);
   $('keepStopped').addEventListener('click', () => { acknowledgeAttention(); dismissedStopJobId = currentState?.job?.id; updateControls(); });
   $('stopButton').addEventListener('click', async () => {

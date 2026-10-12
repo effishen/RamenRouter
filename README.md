@@ -50,9 +50,17 @@ The job overview shows **Attempt #**, **Time left**, **Refinement** and **Finish
 
 The activity line and log explain what RamenRouter is working on. **Live work** highlights the pads, vias, search paths and checks happening on the board. Trial paths are shown separately from completed tracks. The preview shows a sample of the work, so you won't see every search. Turn it off if you prefer a quiet display. Reduced-motion settings keep the highlights still.
 
-## More time, or call it a day
+## More time, more attempts, or refine the best
 
 When the time limit runs out, the job pauses at the next safe point. Choose extra minutes and **Extend time** to carry on from there. This also works if it was still preparing the board and hadn't drawn any traces yet. Keep the page open while it's paused.
+
+When routing attempts run out, choose more attempts and **Add attempts** to keep searching from the same job. The attempt count continues where it stopped, and the best checked result stays available.
+
+You can also choose **Refine current best** to work on the result already shown. This cleans up unused copper, tries shorter paths and checks for redundant vias. It doesn't spend more full-board routing attempts. Useful escape traces on unfinished nets and fixed or protected copper are kept.
+
+For the last four missing connections, **Try flexible finishing** looks for paths with flexible bends and tries small moves of blocking traces. Unfixed imported traces can move too. It keeps component positions, trace widths and routing rules, checks that existing pad connections remain intact, and keeps only an improvement that passes its checks. It can make snake-like paths with bends beyond 45° and 90°; completing every board isn't guaranteed.
+
+These choices are available from the budget prompt and the best-result controls. You can refine or try flexible finishing after stopping, too. Each action keeps the previous checked result available if you stop it or a trial fails.
 
 **Stop routing** keeps the best checked attempt available. Choose **View best result** to see the missing connections and placement advice, or **Keep stopped** to leave it alone. Looking at the result doesn't restart anything. The timer and counts stay where you stopped.
 
@@ -73,6 +81,7 @@ Open **Routing rules → Routing options**. **Apply rules** saves your changes; 
 - **Smart search** gives difficult connections more attention and tries focused repairs when only a few remain. More **Routing attempts** gives it more chances. It keeps the best checked result along the way.
 - **Ramen SMD escape** prepares extra short connections from surface-mount pads to nearby vias before routing. Connections needed to reach a net's chosen main layers are tried automatically, even with this switch off.
 - **Optimize after routing** refines the routes and tries to reduce vias.
+- **Flexible finishing** adds an optional stage after refinement for the last four missing connections. Leave it off to use the ordinary routing stages; you can still try it from the best-result controls later.
 - **Prefer alternating layer directions** encourages vertical traces on the top layer, horizontal on the next, and alternating directions through the stack. The dialog shows the preference for each layer. It's off by default, can bend where needed, and has no effect on single-layer boards.
 - **Allow vias in SMD pads** permits holes in those pads. It doesn't require them. Leave it off and RamenRouter tries to fan out to a via outside the pad when a layer change is needed. Turn it on only if your board can be made that way.
 - **Routing attempts** and **Time limit** set the budget for the whole job.
