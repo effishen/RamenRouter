@@ -27,6 +27,9 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
   }
   async function route(input,options={},emit=()=>{},isCancelled=()=>false){
     const measurement=yieldTask?.measurement,finishRoute=measurement?.begin('routing');
+    // Reports belong to checked statistics from this route only. A retained
+    // snapshot can reuse its report without trusting anything from a file.
+    const validationReports=new WeakMap();
     const fillSignatures=new WeakMap(),fillCache=new Map();
     const hasZones=board=>(board.copperZones||[]).length>0;
     const fillProgress=activity=>emit({type:'progress',phase:'copper_fill',message:activity.message,activity});
@@ -157,7 +160,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
     // Trace length leads for selected nets. A small physical-length surcharge
     // breaks via ties without making long surface detours artificially cheap.
     const searchViaCost=net=>preferShort(net)?Math.min(options.viaCost||net.width*5,net.width*.1):(options.viaCost||net.width*5);
-    function stats(board,checked=true){const finish=measurement?.begin('checking');try{clearSpatial('connectivity-check');detail('Checking connected copper',{stage:'connectivity-check'},'checking');const refining=counters.refinement.status==='running',checks=checked?2:1;if(refining)refinementWork({kind:'checking',processed:0,total:checks});let conn=connectivity(board);if(refining)refinementWork({kind:'checking',processed:1,total:checks});if(checked)detail('Checking copper clearances and routing rules',{stage:'rule-check'},'checking');let v=checked?G.validate(board):null;if(refining&&checked)refinementWork({kind:'checking',processed:2,total:checks});const result={unrouted:conn.unrouted,viaCount:board.vias.length,traceCount:board.traces.length,traceLengthMm:board.traces.reduce((a,t)=>a+length(t),0)*(board.units.mmPerUnit||1),...(shortNets.size?{preferredTraceLengthMm:board.traces.reduce((a,t)=>a+(shortNets.has(t.net)?length(t):0),0)*(board.units.mmPerUnit||1)}:{}),clearanceViolations:v?v.clearanceViolations:null,totalViolations:v?v.totalViolations:null,viaInPadViolations:v?v.viaInPadViolations:null,outlineViolations:v?v.outlineViolations:null,keepoutViolations:v?v.keepoutViolations:null,drcChecked:!!v,belowNominalWidthTraceCount:v?v.belowNominalWidthTraceCount:0,widthRulesChecked:!!v,netCount:board.nets.length,componentCount:new Set(board.pads.map(p=>p.component)).size,layerCount:board.layers.length};if(checked)measurement?.observeChecked?.(result);return result;}finally{finish?.();}}
+    function stats(board,checked=true,connection=null){const finish=measurement?.begin('checking');try{clearSpatial('connectivity-check');detail('Checking connected copper',{stage:'connectivity-check'},'checking');const refining=counters.refinement.status==='running',checks=checked?2:1;if(refining)refinementWork({kind:'checking',processed:0,total:checks});let conn=connection||connectivity(board);if(refining)refinementWork({kind:'checking',processed:1,total:checks});if(checked)detail('Checking copper clearances and routing rules',{stage:'rule-check'},'checking');let v=checked?G.validate(board):null;if(refining&&checked)refinementWork({kind:'checking',processed:2,total:checks});const result={unrouted:conn.unrouted,viaCount:board.vias.length,traceCount:board.traces.length,traceLengthMm:board.traces.reduce((a,t)=>a+length(t),0)*(board.units.mmPerUnit||1),...(shortNets.size?{preferredTraceLengthMm:board.traces.reduce((a,t)=>a+(shortNets.has(t.net)?length(t):0),0)*(board.units.mmPerUnit||1)}:{}),clearanceViolations:v?v.clearanceViolations:null,totalViolations:v?v.totalViolations:null,viaInPadViolations:v?v.viaInPadViolations:null,outlineViolations:v?v.outlineViolations:null,keepoutViolations:v?v.keepoutViolations:null,drcChecked:!!v,belowNominalWidthTraceCount:v?v.belowNominalWidthTraceCount:0,widthRulesChecked:!!v,netCount:board.nets.length,componentCount:new Set(board.pads.map(p=>p.component)).size,layerCount:board.layers.length};if(checked){validationReports.set(result,v);measurement?.observeChecked?.(result);}return result;}finally{finish?.();}}
     detail('Checking input clearances and connectivity',{stage:'input-check'},'checking',true);await yieldNow();
     const initialStats=stats(original),baseViolation=initialStats.clearanceViolations,baseWidth=initialStats.belowNominalWidthTraceCount,baseTotal=initialStats.totalViolations;
     if(options.viaInPad===false&&initialStats.viaInPadViolations){const error=new Error('Existing vias overlap SMD pads while vias in SMD pads are disabled. Clear routing & start over, or enable vias in SMD pads before routing.');error.code='VIA_IN_PAD_CONFLICT';throw error;}
@@ -179,7 +182,10 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       else say("The fanout didn’t pass all the checks. Keeping your imported board.",{phase:'checking'});
     }
     let best=copy(original),bestStats=originalStats;
-    const checkpoint=(pass=counters.attempt.current,phase='routing')=>emit({type:'checkpoint',phase,pass,counters:counterSnapshot(),board:copy(best),stats:bestStats});
+    const checkpoint=(pass=counters.attempt.current,phase='routing')=>{
+      const validation=validationReports.get(bestStats);
+      return emit({type:'checkpoint',phase,pass,counters:counterSnapshot(),board:copy(best),stats:bestStats,...(validation?{validation:copy(validation)}:{})});
+    };
     // Only fully checked best boards become interruption-safe snapshots. Live
     // progress may contain a worse rip-up attempt and is never a checkpoint.
     await checkpoint();
@@ -752,8 +758,9 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       routeActivity={pass,processed:0,total:maxWork};detail("Starting attempt "+pass+'/'+passes+' · '+queue.length+' nets queued',{stage:'pass',queued:queue.length},'routing',true);await yieldNow();
       while(queue.length&&processed<maxWork&&!stopped()){
         let net=queue.shift(),count=(attempts.get(net.id)||0)+1;routeActivity={pass,netId:net.id,netName:net.name,processed,total:maxWork,attempt:count};attempts.set(net.id,count);if(count>3){currentFailures.add(net.id);continue;}if(!repairMode)removeNet(net.id);let result=await routeNet(net,pass>1&&count<3,repairMode);processed++;if(result.failed)currentFailures.add(net.id);else currentFailures.delete(net.id);for(const id of result.ripped){let n=rules.get(id);if(n&&!queue.some(x=>x.id===id))queue.push(n);currentFailures.add(id);}prioritizeShort(queue);
-        if(connectivity(board).unrouted<bestStats.unrouted){if(detail('Checking improved route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();let candidateStats=stats(board,true);if(scoreBetter(candidateStats,bestStats)){best=copy(board);bestStats=candidateStats;await checkpoint(pass);}}
-        if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:"Attempt "+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
+        const candidateConnection=connectivity(board);
+        if(candidateConnection.unrouted<bestStats.unrouted){if(detail('Checking improved route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();let candidateStats=stats(board,true,candidateConnection);if(scoreBetter(candidateStats,bestStats)){best=copy(board);bestStats=candidateStats;await checkpoint(pass);}}
+        if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'routing',pass,message:"Attempt "+pass+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false,candidateConnection)});}await yieldNow();}
       }
       emit({type:'progress',phase:'checking',pass,message:"Checking all clearances and connections"});await yieldNow();let measured=stats(board,true);if(scoreBetter(measured,bestStats)){best=copy(board);bestStats=measured;await checkpoint(pass);}failures=new Set(connectivity(best).components.filter(hasRoutableGap).map(c=>c.net));say("Attempt "+pass+': '+measured.unrouted+' remaining, '+measured.viaCount+' vias; best '+bestStats.unrouted+' remaining.',{phase:'routing',pass,board:copy(best),stats:bestStats});if(!stopped()){counters.attempt.completed++;reportCounters('routing');}if(bestStats.unrouted===0){
         if(!shortNets.size||initialStats.unrouted===0){routingDone=true;break;}
@@ -831,8 +838,9 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
             const net=queue.shift(),count=(attempts.get(net.id)||0)+1;routeActivity={pass:counters.attempt.current,repairRound,netId:net.id,netName:net.name,processed,total:maxWork,attempt:count};attempts.set(net.id,count);if(count>3)continue;
             const result=await routeNet(net,repairRound>1&&count<3,true);processed++;
             for(const id of result.ripped){const n=rules.get(id);if(n&&!queue.some(x=>x.id===id))queue.push(n);}prioritizeShort(queue);
-            if(connectivity(board).unrouted<=repairStats.unrouted+3){if(detail('Checking repaired route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();const measured=stats(board,true);await retain(measured);rememberTrial(measured);}
-            if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing repair '+repairRound+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false)});}await yieldNow();}
+            const candidateConnection=connectivity(board);
+            if(candidateConnection.unrouted<=repairStats.unrouted+3){if(detail('Checking repaired route · '+net.name,{stage:'candidate-check'},'checking'))await yieldNow();const measured=stats(board,true,candidateConnection);await retain(measured);rememberTrial(measured);}
+            if(processed%3===0){if(Date.now()-lastPreview>=1200){lastPreview=Date.now();emit({type:'progress',phase:'finishing',pass:counters.attempt.current,message:'Finishing repair '+repairRound+' · '+processed+' net attempts · '+queue.length+' queued · last '+net.name,activity:{...routeActivity,processed,queued:queue.length,stage:'net-complete'},board:copy(board),stats:stats(board,false,candidateConnection)});}await yieldNow();}
           }
           emit({type:'progress',phase:'checking',pass:counters.attempt.current,message:'Checking the repaired connections'});await yieldNow();
           const measured=stats(board,true);await retain(measured);rememberTrial(measured);

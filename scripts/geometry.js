@@ -186,7 +186,7 @@ function createRamenGeometry(onActivity=null) {
   // remain unchanged while it is in use; a new pass creates fresh indices.
   // Neither distanceShapes nor closestShapePoints changes its public behavior.
   function polygonPairChecker() {
-    const preparedShapes=new WeakMap();
+    const preparedShapes=new WeakMap(),nearestEdges=new WeakMap();
     function validRings(shape,maxCount=Infinity) {
       const rings=polygonRings(shape),count=rings.reduce((sum,ring)=>sum+ring.length,0);
       return count<=maxCount&&rings.every(ring=>ring.length>=3&&ring.every(p=>Array.isArray(p)&&p.length>=2&&Number.isFinite(p[0])&&Number.isFinite(p[1])&&Math.abs(p[0])<=1e9&&Math.abs(p[1])<=1e9));
@@ -205,7 +205,8 @@ function createRamenGeometry(onActivity=null) {
         return{ring,edges,index:edges.length>=64?spatialIndex(edges,cell):null,bounds:shapeBounds({type:'polygon',points:ring})};
       });
       const allEdges=ringData.flatMap(ring=>ring.edges),vertices=rings.flatMap(ring=>ring.map(p=>({p,bounds:{minX:p[0],minY:p[1],maxX:p[0],maxY:p[1]}})));
-      const result={shape,bounds,magnitude,allEdges,edges:spatialIndex(allEdges,cell),outer:ringData[0],holes:spatialIndex(ringData.slice(1),cell),vertices:spatialIndex(vertices,cell)};
+      const core={points:vertices.map(vertex=>vertex.p),edges:allEdges.map(edge=>[edge.a,edge.b]),radius:0,polygon:true};
+      const result={shape,bounds,magnitude,count,core,allEdges,edges:spatialIndex(allEdges,cell),outer:ringData[0],holes:spatialIndex(ringData.slice(1),cell),vertices:spatialIndex(vertices,cell)};
       preparedShapes.set(shape,result);return result;
     }
     function ringState(p,ring,margin) {
@@ -224,22 +225,25 @@ function createRamenGeometry(onActivity=null) {
       return true;
     }
     function pair(a,b) {
-      let polygon=a.type==='polygon'?a:null,other=b;
-      if(!polygon||!prepare(polygon)){polygon=b.type==='polygon'?b:null;other=a;}
-      if(!polygon)return null;
-      const prepared=prepare(polygon);if(!prepared)return null;
-      if(other.type==='polygon'){if(!validRings(other,32))return null;}
+      const preparedA=a.type==='polygon'?prepare(a):null,preparedB=b.type==='polygon'?prepare(b):null;
+      const prepared=preparedA&&(!preparedB||preparedA.count>=preparedB.count)?preparedA:preparedB;
+      if(!prepared)return null;
+      const polygon=prepared.shape,other=polygon===a?b:a,otherPrepared=polygon===a?preparedB:preparedA;
+      if(other.type==='polygon'){if(!otherPrepared&&!validRings(other))return null;}
       else if(other.type==='circle'||other.type==='capsule'){
         const coordinates=other.type==='circle'?[other.cx,other.cy,other.r]:[...other.a,...other.b,other.r];
         if(!coordinates.every(Number.isFinite)||coordinates.some(x=>Math.abs(x)>1e9)||other.r<0)return null;
       }else return null;
       const box=shapeBounds(other);if(!Object.values(box).every(Number.isFinite))return null;
-      const scale=Math.max(prepared.magnitude,...Object.values(box).map(Math.abs)),margin=EPS*8+256*Number.EPSILON*scale;
-      return{prepared,polygon,other,box,margin,core:shapeCore(other),largeFirst:polygon===a};
+      const core=otherPrepared?.core||shapeCore(other);
+      let otherMagnitude=otherPrepared?.magnitude||1;
+      if(core.polygon&&!otherPrepared)for(const p of core.points)otherMagnitude=Math.max(otherMagnitude,Math.abs(p[0]),Math.abs(p[1]));
+      const scale=Math.max(prepared.magnitude,otherMagnitude,...Object.values(box).map(Math.abs)),margin=EPS*8+256*Number.EPSILON*scale;
+      return{prepared,polygon,other,otherPrepared,box,margin,core,largeFirst:polygon===a};
     }
     function contained(info) {
       for(const p of info.core.points)if(inside(p,info.prepared,info.margin))return true;
-      if(info.core.polygon)for(const {p} of info.prepared.vertices.query(info.box,info.margin))if(pointInShape(p[0],p[1],info.other))return true;
+      if(info.core.polygon)for(const {p} of info.prepared.vertices.query(info.box,info.margin))if(info.otherPrepared?inside(p,info.otherPrepared,info.margin):pointInShape(p[0],p[1],info.other))return true;
       return false;
     }
     function intersects(info) {
@@ -264,6 +268,10 @@ function createRamenGeometry(onActivity=null) {
       if(!Number.isFinite(required))return false;
       const info=pair(a,b);if(!info||contained(info)||intersects(info))return false;
       const threshold=Math.max(required,EPS)+info.margin,reach=info.core.radius+threshold;
+      if(info.core.polygon){
+        for(const otherEdge of info.core.edges){const bounds={minX:Math.min(otherEdge[0][0],otherEdge[1][0]),minY:Math.min(otherEdge[0][1],otherEdge[1][1]),maxX:Math.max(otherEdge[0][0],otherEdge[1][0]),maxY:Math.max(otherEdge[0][1],otherEdge[1][1])};for(const edge of info.prepared.edges.query(bounds,threshold))if(gap(info,edge,otherEdge)<=reach)return false;}
+        return true;
+      }
       for(const edge of info.prepared.edges.query(info.box,threshold))for(const otherEdge of info.core.edges)if(gap(info,edge,otherEdge)<=reach)return false;
       return true;
     }
@@ -272,6 +280,10 @@ function createRamenGeometry(onActivity=null) {
       if(contained(info)||intersects(info))return true;
       // The generous query margin affects candidate selection only. Contact
       // itself retains the exact subtraction and EPS tests of distanceShapes.
+      if(info.core.polygon){
+        for(const otherEdge of info.core.edges){const bounds={minX:Math.min(otherEdge[0][0],otherEdge[1][0]),minY:Math.min(otherEdge[0][1],otherEdge[1][1]),maxX:Math.max(otherEdge[0][0],otherEdge[1][0]),maxY:Math.max(otherEdge[0][1],otherEdge[1][1])};for(const edge of info.prepared.edges.query(bounds,EPS+info.margin))if(gap(info,edge,otherEdge)<=EPS)return true;}
+        return false;
+      }
       for(const edge of info.prepared.edges.query(info.box,EPS+info.margin))for(const otherEdge of info.core.edges){
         const actual=gap(info,edge,otherEdge);
         if(info.other.type==='capsule'&&actual<=EPS)return true;
@@ -279,7 +291,69 @@ function createRamenGeometry(onActivity=null) {
       }
       return false;
     }
-    return{contact,separated};
+    // Airwire endpoints need the exact nearest pair, not just a contact test.
+    // Preserve original vertex/edge order and strict tie comparisons while
+    // avoiding projections onto every distant edge of a fragmented pour.
+    function nearestIndex(edges) {
+      function build(items){
+        const bounds={minX:Infinity,minY:Infinity,maxX:-Infinity,maxY:-Infinity};
+        for(const edge of items){bounds.minX=Math.min(bounds.minX,edge.bounds.minX);bounds.minY=Math.min(bounds.minY,edge.bounds.minY);bounds.maxX=Math.max(bounds.maxX,edge.bounds.maxX);bounds.maxY=Math.max(bounds.maxY,edge.bounds.maxY);}
+        if(items.length<=16)return{bounds,items};
+        const axis=bounds.maxX-bounds.minX>=bounds.maxY-bounds.minY?'X':'Y';
+        items.sort((a,b)=>(a.bounds['min'+axis]+a.bounds['max'+axis])-(b.bounds['min'+axis]+b.bounds['max'+axis]));
+        const mid=Math.floor(items.length/2);return{bounds,left:build(items.slice(0,mid)),right:build(items.slice(mid))};
+      }
+      const root=build(edges.slice());
+      return{query(bounds,pad){
+        const expanded={minX:bounds.minX-pad,minY:bounds.minY-pad,maxX:bounds.maxX+pad,maxY:bounds.maxY+pad},found=[],pending=[root];
+        while(pending.length){const node=pending.pop();if(!boxesOverlap(node.bounds,expanded))continue;if(node.items){for(const edge of node.items)if(boxesOverlap(edge.bounds,expanded))found.push(edge);}else pending.push(node.left,node.right);}
+        return found;
+      }};
+    }
+    function nearest(a,b) {
+      if(a.type!=='polygon'||b.type!=='polygon')return closestShapePoints(a,b);
+      const info=pair(a,b);
+      if(!info||info.core.points.length<=32)return closestShapePoints(a,b);
+      const preparedA=info.largeFirst?info.prepared:info.otherPrepared,preparedB=info.largeFirst?info.otherPrepared:info.prepared;
+      const ac=info.largeFirst?info.prepared.core:info.core,bc=info.largeFirst?info.core:info.prepared.core;
+      for(const p of bc.points)if(preparedA?inside(p,preparedA,info.margin):pointInShape(p[0],p[1],a))return{distance:0,a:p,b:p};
+      for(const p of ac.points)if(preparedB?inside(p,preparedB,info.margin):pointInShape(p[0],p[1],b))return{distance:0,a:p,b:p};
+      let indexed=nearestEdges.get(b);
+      if(!indexed){
+        const edges=bc.edges.map(([a,b],ordinal)=>({a,b,ordinal,bounds:{minX:Math.min(a[0],b[0]),minY:Math.min(a[1],b[1]),maxX:Math.max(a[0],b[0]),maxY:Math.max(a[1],b[1])}}));
+        indexed=nearestIndex(edges);nearestEdges.set(b,indexed);
+      }
+      let zeroOrdinal=Infinity,best=null;
+      // Keep the full raw t/u scan. Nearly parallel arithmetic can report a
+      // zero outside the geometric query box; its first pair must still win.
+      scan:for(let ai=0;ai<ac.edges.length;ai++){
+        const [a0,a1]=ac.edges[ai],dx=a1[0]-a0[0],dy=a1[1]-a0[1];
+        for(let bi=0;bi<bc.edges.length;bi++){
+          const [b0,b1]=bc.edges[bi],ex=b1[0]-b0[0],ey=b1[1]-b0[1],den=dx*ey-dy*ex;
+          if(Math.abs(den)>EPS*EPS){const t=((b0[0]-a0[0])*ey-(b0[1]-a0[1])*ex)/den,u=((b0[0]-a0[0])*dy-(b0[1]-a0[1])*dx)/den;if(t>=0&&t<=1&&u>=0&&u<=1){zeroOrdinal=ai*bc.edges.length+bi;best=closestSegmentPoints(a0,a1,b0,b1);break scan;}}
+        }
+      }
+      if(!best)best=closestSegmentPoints(ac.edges[0][0],ac.edges[0][1],bc.edges[0][0],bc.edges[0][1]);
+      if(best.distance!==0||Number.isFinite(zeroOrdinal)&&zeroOrdinal>0){
+        search:for(let ai=0;ai<ac.edges.length;ai++){
+          if(ai*bc.edges.length>=zeroOrdinal)break;
+          const [a0,a1]=ac.edges[ai],bounds={minX:Math.min(a0[0],a1[0]),minY:Math.min(a0[1],a1[1]),maxX:Math.max(a0[0],a1[0]),maxY:Math.max(a0[1],a1[1])};
+          const candidates=indexed.query(bounds,best.distance+info.margin).sort((a,b)=>a.ordinal-b.ordinal);
+          for(const edge of candidates){
+            const ordinal=ai*bc.edges.length+edge.ordinal;if(ordinal>=zeroOrdinal)break;
+            const pair=closestSegmentPoints(a0,a1,edge.a,edge.b);
+            if(pair.distance<best.distance)best=pair;
+            if(pair.distance===0){best=pair;break search;}
+          }
+        }
+      }
+      // Match closestShapePoints' final arithmetic, including EPS collapse
+      // and signed-zero behavior even though both polygon radii are zero.
+      if(best.distance<=EPS){const p=best.distance?[best.a[0]+(best.b[0]-best.a[0])*Math.min(1,0/best.distance),best.a[1]+(best.b[1]-best.a[1])*Math.min(1,0/best.distance)]:best.a;return{distance:0,a:p,b:p};}
+      const dx=(best.b[0]-best.a[0])/best.distance,dy=(best.b[1]-best.a[1])/best.distance;
+      return{distance:best.distance,a:[best.a[0]+dx*0,best.a[1]+dy*0],b:[best.b[0]-dx*0,best.b[1]-dy*0]};
+    }
+    return{contact,separated,nearest};
   }
   function contactChecker(){return polygonPairChecker().contact;}
   function netKey(net) { return net===null || net===undefined || net===0 || net==='' ? null : String(net); }
@@ -334,7 +408,7 @@ function createRamenGeometry(onActivity=null) {
   }
   function connectivity(board,options={}) {
     const activity=observesActivity?activityContext('connectivity'):null;
-    const {objects,primitives}=copper(board),uf=unionFind(objects.length),layers=indexing(board,primitives),touches=contactChecker();
+    const {objects,primitives}=copper(board),uf=unionFind(objects.length),layers=indexing(board,primitives),pairChecker=polygonPairChecker(),touches=pairChecker.contact;
     let primitiveCount=0;
     for(const p of primitives){primitiveCount++;if(netKey(p.net)===null)continue;for(const q of layers.get(p.layer).query(p.bounds,EPS)){
       if(q.object.uid<=p.object.uid || netKey(q.net)!==netKey(p.net) || uf.find(q.object.uid)===uf.find(p.object.uid))continue;
@@ -362,7 +436,7 @@ function createRamenGeometry(onActivity=null) {
             if(observesActivity)activityAt(activity,ap,bp,undefined,undefined,'Checking the gap between disconnected copper');
             const dx=Math.max(0,ap.bounds.minX-bp.bounds.maxX,bp.bounds.minX-ap.bounds.maxX),dy=Math.max(0,ap.bounds.minY-bp.bounds.maxY,bp.bounds.minY-ap.bounds.maxY);
             if(Math.hypot(dx,dy)>=closest.distance)continue;
-            const pair=closestShapePoints(ap.shape,bp.shape);
+            const pair=pairChecker.nearest(ap.shape,bp.shape);
             if(pair.distance<closest.distance)closest={distance:pair.distance,from:pair.a,to:pair.b,fromLayer:ap.layer,toLayer:bp.layer};
           }return closest;}
         let last=0;

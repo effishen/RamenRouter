@@ -12,7 +12,7 @@
   let job = null, worker = null, workerUrl = null, inputText = null;
   let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, copperTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.3.5',engineVersion:'Ramen JS 0.3.5',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.3.6',engineVersion:'Ramen JS 0.3.6',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
     const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,copperUpdate:job?.copperUpdate,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
@@ -277,7 +277,8 @@
         airwires:air.map(a=>({net:name(a.net),points:(a.points||[a.from,a.to]).map(p)}))};
     }
     async function checkedResult(result,initialBoard,options,name,initialStats,finalStats,fromInput=false,includeIncomplete=!options.fanoutOnly,prepared=null,writeLog=false) {
-      stage('checking',"Checking clearances and trace widths before saving this result.",{},writeLog);
+      const checkingMessage=prepared?.validation?(prepared.connection?"Saving the checked result.":"Checking connections before saving this result."):"Checking clearances and trace widths before saving this result.";
+      stage('checking',checkingMessage,{},writeLog);
       await yieldTask();
       const report=prepared?.validation||measured('checking',()=>geo.validate(result));
       const connection=prepared?.connection||measured('checking',()=>geo.connectivity(result));
@@ -290,7 +291,7 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),...(typeof dsn.exportCopperData==='function'?{copper:dsn.exportCopperData(result)}:{}),report:JSON.stringify({engine:'Ramen JS 0.3.5',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),copperExport:{addedFillsIncluded:false,settingsSavedSeparately:true,requiresMatchingCadPours:!!result.copperZones?.length},initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),...(typeof dsn.exportCopperData==='function'?{copper:dsn.exportCopperData(result)}:{}),report:JSON.stringify({engine:'Ramen JS 0.3.6',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),copperExport:{addedFillsIncluded:false,settingsSavedSeparately:true,requiresMatchingCadPours:!!result.copperZones?.length},initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
@@ -300,8 +301,8 @@
       if(!['inspect','run','clear','layer-rules','copper-zones'].includes(m.type)) return;
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
-        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.5',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.5',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        managedBudget=m.type==='run';measurement=managedBudget?benchmark.createCollector({appVersion:'0.3.6',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,settings:benchmark.cleanSettings(m.options),appVersion:'0.3.6',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
         const b=m.type==='copper-zones'&&m.board?m.board:measured('reading',()=>dsn.parse(m.text,m.name,m.type==='inspect'?{inputCopper:true}:undefined));measurement?.setNets(b.nets);
@@ -381,7 +382,10 @@
           if(message.counters)measurement?.setRounds(message.counters);
           if(message.type==='checkpoint') {
             const fromInput=message.stats.traceCount===initial.traceCount&&message.stats.viaCount===initial.viaCount&&message.stats.unrouted===initial.unrouted;
-            return checkedResult(message.board,b,m.options,m.name,initial,message.stats,fromInput).then(checked=>send({type:'checkpoint',...checked,phase:message.phase,pass:message.pass,counters:message.counters,runReport:reportSnapshot('running',true)}));
+            // The router report was made immediately before retaining this
+            // copied snapshot. Connectivity still runs here for its airwires.
+            const prepared=message.validation?{validation:message.validation}:null;
+            return checkedResult(message.board,b,m.options,m.name,initial,message.stats,fromInput,!m.options.fanoutOnly,prepared).then(checked=>send({type:'checkpoint',...checked,phase:message.phase,pass:message.pass,counters:message.counters,runReport:reportSnapshot('running',true)}));
           }
           const data={type:'progress',phase:message.phase,pass:message.pass,message:message.message,activity:message.activity,log:message.log,counters:message.counters};
           if(message.board && Date.now()-lastPreview>1200) {

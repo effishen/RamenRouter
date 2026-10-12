@@ -50,13 +50,18 @@ function createRamenAdvisor(geo) {
     // Inspect the input, rather than attributing a newly generated route to the
     // original placement. Only contact between two assigned nets is a short.
     const inputCopper=geo.copper(initial),inputIndex=index(inputCopper.primitives),shortPairs=new Set(),shortNets=new Set();
+    // This pass only needs to know whether imported copper touches. Use the
+    // same indexed contact check as routing before calculating a short's
+    // exact highlight points; a detailed pour should not repeat a full
+    // closest-point search against every nearby polygon pad.
+    const touches=typeof geo.contactChecker==='function'?geo.contactChecker():(a,b)=>geo.distanceShapes(a,b)<=EPS;
     for(const a of inputCopper.primitives) {
       if(items.length>=limit)break;
       for(const b of inputIndex.query(a.bounds,EPS)) {
         if(a.layer!==b.layer||a.object.uid>=b.object.uid||key(a.net)===null||key(b.net)===null||key(a.net)===key(b.net))continue;
         if(onActivity)activityAt(a.shape,a.layer,a.net,b,"Checking contact in your imported copper",a.object.kind==='pad'?a.object.item:null);
         const pairKey=a.object.uid+':'+b.object.uid;
-        if(shortPairs.has(pairKey)||geo.distanceShapes(a.shape,b.shape)>EPS)continue;
+        if(shortPairs.has(pairKey)||!touches(a.shape,b.shape))continue;
         shortPairs.add(pairKey);
         shortNets.add(key(a.net));shortNets.add(key(b.net));
         const closest=geo.closestShapePoints(a.shape,b.shape),pad=a.object.kind==='pad'?a.object.item:b.object.kind==='pad'?b.object.item:null;
