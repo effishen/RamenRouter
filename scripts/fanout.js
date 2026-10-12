@@ -1,5 +1,5 @@
 /* Checked off-grid fanout for the browser engine. GPL-3.0. */
-function createRamenFanout(geometry, yieldTask, copper) {
+function createRamenFanout(geometry, yieldTask) {
   'use strict';
   const G=geometry,EPS=1e-7,copy=x=>JSON.parse(JSON.stringify(x));
   const dot=(p,v)=>p[0]*v[0]+p[1]*v[1];
@@ -17,10 +17,8 @@ function createRamenFanout(geometry, yieldTask, copper) {
     const measurement=yieldTask?.measurement,finishFanout=measurement?.begin('fanout');
     const candidatesByNet=measurement?new Map():null;
     let combinations=0;
-    const fillSignatures=new WeakMap();
-    function refreshFills(board){if(!(board.copperZones||[]).length)return;if(!copper?.build)throw new Error("Copper fills aren’t ready for fanout. Reload RamenRouter and try again.");const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;board.copperFills=copper.build(board,options);fillSignatures.set(board,signature);}
     const flush=()=>{if(!measurement)return;for(const [netId,count]of candidatesByNet)measurement.count('fanoutCandidates',count,netId);candidatesByNet.clear();if(combinations){measurement.count('fanoutCombinations',combinations);combinations=0;}};
-    const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
+    const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     const clock=typeof yieldTask?.now==='function'?yieldTask.now:Date.now;
     const board=copy(input),log=[],started=clock(),deadline=yieldTask?.managesBudget?Infinity:started+(options.timeoutMinutes||30)*60000;
@@ -43,8 +41,8 @@ function createRamenFanout(geometry, yieldTask, copper) {
     const nets=new Map(board.nets.map(n=>[n.id,n])),defs=new Map(board.viaDefs.map(v=>[v.name,v]));
     const traceLayers=net=>net.useLayers||board.layers.map(l=>l.index);
     const padCounts=new Map(board.nets.map(n=>[n.id,board.pads.filter(p=>p.net===n.id).length]));
-    const validate=()=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.validate(board);}finally{finish?.();}};
-    const baseValidation=validate(),edges=G.boundaryEdges(board),primitives=G.copper(board).primitives.filter(p=>!(p.object.kind==='fill'&&p.object.item.zoneId!=null&&!p.object.item.fixed&&!p.object.item.imported));
+    const validate=()=>{const finish=measurement?.begin('checking');try{return G.validate(board);}finally{finish?.();}};
+    const baseValidation=validate(),edges=G.boundaryEdges(board),primitives=G.copper(board).primitives;
     if(options.viaInPad===false&&baseValidation.viaInPadViolations){const error=new Error("This board already has vias touching SMD pads, but that option is off. Clear routing & start over, or allow vias in SMD pads.");error.code='VIA_IN_PAD_CONFLICT';throw error;}
     const span=Math.max(board.bounds.maxX-board.bounds.minX,board.bounds.maxY-board.bounds.minY),cell=Math.max(span/60,.01);
     const indices=new Map(board.layers.map(l=>[l.index,G.spatialIndex([],cell)]));
@@ -74,6 +72,8 @@ function createRamenFanout(geometry, yieldTask, copper) {
       const radius=clearance(p.net),near=indices.get(p.layer)?.query(p.bounds,maxClearance)||[];
       for(const q of near.concat(temporary.filter(q=>q.layer===p.layer))){
         const distance=G.distanceShapes(p.shape,q.shape),otherNet=q.net;
+        const otherVia=q.object?.kind==='via'?q.object.item:q.kind==='via'?q.via:null;
+        if(p.kind==='via'&&otherVia&&G.viaSpacing(board,p.via,otherVia)?.violates)return false;
         if(!sameNet(p.net,otherNet)){if(distance+EPS<G.clearance(board,nets.get(p.net),nets.get(otherNet))||distance<EPS)return false;}
         else if(p.kind==='via'&&distance<=EPS){
           const pad=q.object?.kind==='pad'?q.object.item:null;
@@ -83,7 +83,7 @@ function createRamenFanout(geometry, yieldTask, copper) {
       for(const k of board.keepouts||[]){if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.kind!=='via')continue;const distance=G.distanceShapes(p.shape,k.shape);if(distance+EPS<(k.clearance??radius)||distance<=EPS)return false;}
       return true;
     }
-    function legalBundle(bundle,temporary=[]) {const id=++visualCandidateId,netId=bundle.traces[0]?.net??bundle.vias[0]?.net;if(candidatesByNet)candidatesByNet.set(netId,(candidatesByNet.get(netId)||0)+1);spatial("Trying a fanout · "+(nets.get(netId)?.name||'pad escape'),{stage:'fanout-candidate',netId,netName:nets.get(netId)?.name,candidateId:id},()=>bundleVisual(bundle,"Proposed fanout being checked"));let candidateBoard=null;return bundle.traces.every(t=>traceLayers(nets.get(t.net)).includes(t.layer)||G.isPermittedLayerEscape(candidateBoard||(candidateBoard={...board,vias:board.vias.concat(bundle.vias)}),t,nets.get(t.net)))&&itemPrimitives(bundle).every(p=>clearPrimitive(p,temporary));}
+    function legalBundle(bundle,temporary=[]) {const id=++visualCandidateId,netId=bundle.traces[0]?.net??bundle.vias[0]?.net;if(candidatesByNet)candidatesByNet.set(netId,(candidatesByNet.get(netId)||0)+1);spatial("Trying a fanout · "+(nets.get(netId)?.name||'pad escape'),{stage:'fanout-candidate',netId,netName:nets.get(netId)?.name,candidateId:id},()=>bundleVisual(bundle,"Proposed fanout being checked"));let candidateBoard=null;return bundle.vias.every((via,i)=>bundle.vias.slice(0,i).every(other=>!G.viaSpacing(board,via,other)?.violates))&&bundle.traces.every(t=>traceLayers(nets.get(t.net)).includes(t.layer)||G.isPermittedLayerEscape(candidateBoard||(candidateBoard={...board,vias:board.vias.concat(bundle.vias)}),t,nets.get(t.net)))&&itemPrimitives(bundle).every(p=>clearPrimitive(p,temporary));}
     function bundleFor(entry,end,normal,shoulder) {
       const p=entry.pad,net=entry.net,def=defs.get(net.viaName),layer=entry.shape.layer;
       const points=[[p.x,p.y]];
@@ -179,7 +179,9 @@ function createRamenFanout(geometry, yieldTask, copper) {
           const k=a._uid*uid+b._uid;
           if(checked.has(k))return checked.get(k);
           const valid=a._primitives.every(p=>b._primitives.every(q=>{
-            if(p.layer!==q.layer||sameNet(p.net,q.net))return true;
+            if(p.layer!==q.layer)return true;
+            if(p.kind==='via'&&q.kind==='via'&&G.viaSpacing(board,p.via,q.via)?.violates)return false;
+            if(sameNet(p.net,q.net))return true;
             const distance=G.distanceShapes(p.shape,q.shape);
             return distance>=EPS&&distance+EPS>=G.clearance(board,nets.get(p.net),nets.get(q.net));
           }));

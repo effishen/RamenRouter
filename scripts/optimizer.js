@@ -1,5 +1,5 @@
 /* RamenRouter checked path refinement. GPL-3.0-or-later. */
-function createRamenOptimizer(geometry, yieldTask, copper) {
+function createRamenOptimizer(geometry, yieldTask) {
   'use strict';
   const G=geometry,EPS=1e-8;
   const clone=x=>JSON.parse(JSON.stringify(x));
@@ -19,11 +19,8 @@ function createRamenOptimizer(geometry, yieldTask, copper) {
     let candidateNet=null,pendingCandidates=0;
     const flush=()=>{if(pendingCandidates){measurement?.count('refinementCandidates',pendingCandidates,candidateNet);pendingCandidates=0;}};
     const pause=()=>{flush();return wait();};
-    const fillSignatures=new WeakMap(),fillCache=new Map();
-    const hasZones=board=>(board.copperZones||[]).length>0;
-    function refreshFills(board){if(!hasZones(board))return;if(!copper?.build)throw new Error("Copper fills aren’t ready for refinement. Reload RamenRouter and try again.");const signature=JSON.stringify([board.copperZones,board.traces,board.vias]);if(fillSignatures.get(board)===signature)return;if(fillCache.has(signature)){board.copperFills=clone(fillCache.get(signature));fillCache.delete(signature);fillCache.set(signature,board.copperFills);}else{board.copperFills=copper.build(board,options);fillCache.set(signature,board.copperFills);while(fillCache.size>4)fillCache.delete(fillCache.keys().next().value);}fillSignatures.set(board,signature);}
-    const validate=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.validate(board);}finally{finish?.();}};
-    const connectivity=board=>{const finish=measurement?.begin('checking');try{refreshFills(board);return G.connectivity(board,{airwires:false});}finally{finish?.();}};
+    const validate=board=>{const finish=measurement?.begin('checking');try{return G.validate(board);}finally{finish?.();}};
+    const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     let lastDetail=0;
     let lastWork=0,workKind=null;
@@ -101,20 +98,6 @@ function createRamenOptimizer(geometry, yieldTask, copper) {
     }
     flush();
     work('traces',processedTraces,totalTraces,true);
-    // A real plane can replace generated point-to-point trunks. Delete only
-    // after rebuilding the pour and checking the complete conductive graph.
-    let removedTraces=0;
-    if(hasZones(board)){
-      const planeNets=new Set((board.copperZones||[]).filter(zone=>zone.enabled!==false).map(zone=>zone.net));
-      for(let index=board.traces.length-1;index>=(options.preserveTraceCount||0)&&!isCancelled();index--){
-        const trace=board.traces[index];if(trace.fixed||trace.fanout||!planeNets.has(trace.net))continue;
-        if(index%8===0){await pause();if(isCancelled())break;}
-        board.traces.splice(index,1);
-        const next=connectivity(board).unrouted,checked=validate(board);
-        if(next<=unrouted&&checked.totalViolations<=base.totalViolations&&checked.belowNominalWidthTraceCount<=base.belowNominalWidthTraceCount){removedTraces++;unrouted=next;}
-        else board.traces.splice(index,0,trace);
-      }
-    }
     // Remove electrically redundant generated vias, checking the complete copper graph.
     // A local off-layer escape must still terminate in a real transition even
     // if another same-net path makes that via electrically redundant.
@@ -138,7 +121,7 @@ function createRamenOptimizer(geometry, yieldTask, copper) {
       emit({type:'progress',phase:'optimizing',message:"The refined route didn’t pass all the checks. Keeping the previous checked board."});return input;
     }
     const savings=(originalLength-board.traces.reduce((s,t)=>s+length(t.points),0))*board.units.mmPerUnit;
-    emit({type:'progress',phase:'optimizing',message:'Refinement: '+changed+' paths shortened, '+removed+" unnecessary vias removed"+(removedTraces?', '+removedTraces+" traces replaced by copper-fill connections":'')+', '+savings.toFixed(4)+' mm saved.',board});
+    emit({type:'progress',phase:'optimizing',message:'Refinement: '+changed+' paths shortened, '+removed+" unnecessary vias removed"+', '+savings.toFixed(4)+' mm saved.',board});
     return board;
     }finally{flush();finishRefinement?.();}
   }

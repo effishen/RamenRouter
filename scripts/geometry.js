@@ -369,6 +369,25 @@ function createRamenGeometry(onActivity=null) {
     const value=c=>Math.max(0,board.classClearances?.[c]??(c===ca?a.clearance:b.clearance)??base);
     return ca===cb?value(ca):Math.max(base,value(ca),value(cb));
   }
+  // Two vias are separate drilled features even when they carry the same net.
+  // Their copper circles need the existing clearance on every shared layer.
+  // A generated route may reuse one exact physical via, but imported duplicate
+  // objects are still reported so an existing board is never silently changed.
+  function viaLayers(board,via) {
+    const def=(board.viaDefs||[]).find(d=>d.name===via.padstack);
+    return via.layers||Array.from({length:(def?.toLayer??0)-(def?.fromLayer??0)+1},(_,i)=>i+(def?.fromLayer??0));
+  }
+  function viaDiameter(board,via) {return via.diameter??(board.viaDefs||[]).find(d=>d.name===via.padstack)?.diameter;}
+  function samePhysicalVia(board,a,b) {
+    const al=viaLayers(board,a),bl=viaLayers(board,b);
+    return netKey(a.net)!==null&&netKey(a.net)===netKey(b.net)&&a.padstack===b.padstack&&Math.hypot(a.x-b.x,a.y-b.y)<=EPS&&Math.abs(viaDiameter(board,a)-viaDiameter(board,b))<=EPS&&al.length===bl.length&&al.every(layer=>bl.includes(layer));
+  }
+  function viaSpacing(board,a,b) {
+    const layers=viaLayers(board,a),shared=layers.find(layer=>viaLayers(board,b).includes(layer));
+    if(shared===undefined)return null;
+    const actual=Math.hypot(a.x-b.x,a.y-b.y)-(viaDiameter(board,a)+viaDiameter(board,b))/2,required=clearance(board,a.net,b.net);
+    return {layer:shared,actual,required,violates:actual+EPS<required};
+  }
   function unionFind(count) {
     const parent=Array.from({length:count},(_,i)=>i),rank=new Uint8Array(count);
     function find(i){while(parent[i]!==i){parent[i]=parent[parent[i]];i=parent[i];}return i;}
@@ -537,9 +556,7 @@ function createRamenGeometry(onActivity=null) {
     const nets=new Map((board.nets||[]).map(n=>[netKey(n.id),n]));
     const allowedLayers=new Set((board.layers||[]).map((l,i)=>l.index??i));
     const netClearance=net=>Math.max(0,nets.get(netKey(net))?.routingClearance??nets.get(netKey(net))?.clearance??board.defaultClearance??0);
-    const zoneRules=new Map((board.copperZones||[]).map(zone=>[zone.id,zone]));
-    const fillRule=(object,key)=>object.kind==='fill'?Math.max(0,...(object.item.zoneIds||[object.item.zoneId]).map(id=>zoneRules.get(id)?.[key]||0)):0;
-    const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}),...(board.copperZones||[]).map(z=>z.clearance||0));
+    const maxClearance=Math.max(board.crossClassClearance||0,board.defaultClearance||0,...(board.nets||[]).map(n=>n.routingClearance??n.clearance??0),...Object.values(board.classClearances||{}));
     const violations=[],widthDeviations=[],seen=new Set();
     // A poured polygon can have thousands of edges. Check only the nearby
     // edges when proving a circle or trace has enough clearance; keep the
@@ -553,9 +570,13 @@ function createRamenGeometry(onActivity=null) {
       if(q.object.uid<=p.object.uid)continue;
       if(observesActivity)activityAt(activity,p,q,undefined,undefined,'Checking the space between copper');
       const same=netKey(p.net)!==null&&netKey(p.net)===netKey(q.net);
-      if(!same){const required=Math.max(clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net))),fillRule(p.object,'clearance'),fillRule(q.object,'clearance'));if(separatedPolygon(p.shape,q.shape,required))continue;const actual=distanceShapes(p.shape,q.shape);if(actual+EPS<required||actual<=EPS)
+      if(!same){const required=clearance(board,nets.get(netKey(p.net)),nets.get(netKey(q.net)));if(separatedPolygon(p.shape,q.shape,required))continue;const actual=distanceShapes(p.shape,q.shape);if(actual+EPS<required||actual<=EPS)
         violation(actual<=EPS?'short':'clearance',`c:${p.object.uid}:${q.object.uid}:${p.layer}`,{layer:p.layer,a:{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net},b:{kind:q.object.kind,index:q.object.index,id:q.object.id,net:q.net},actual,required});
       }else{
+        if(p.object.kind==='via'&&q.object.kind==='via'){
+          const gap=viaSpacing(board,p.object.item,q.object.item);
+          if(gap?.violates)violation('via_spacing',`v:${p.object.uid}:${q.object.uid}`,{layer:gap.layer,a:{kind:'via',index:p.object.index,net:p.net},b:{kind:'via',index:q.object.index,net:q.net},actual:gap.actual,required:gap.required});
+        }
         const via=p.object.kind==='via'?p.object:q.object.kind==='via'?q.object:null;
         const pad=p.object.kind==='pad'?p.object:q.object.kind==='pad'?q.object:null;
         if(via&&pad&&new Set(pad.item.shapes.map(s=>s.layer)).size===1){
@@ -588,17 +609,17 @@ function createRamenGeometry(onActivity=null) {
     let outlineCount=0;
     for(const p of primitives){
       if(observesActivity)activityAt(activity,p,null,++outlineCount,primitives.length,'Checking clearance from the board edge');
-      if(!shapeInsideBoard(p.shape,board,edges,Math.max(board.edgeClearance||0,fillRule(p.object,'edgeClearance'))))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
+      if(!shapeInsideBoard(p.shape,board,edges,board.edgeClearance||0))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
       for(const [index,k] of (board.keepouts||[]).entries()){
         if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.object.kind!=='via')continue;
         if(observesActivity)activityAt(activity,p,{shape:k.shape,layer:p.layer},outlineCount,primitives.length,'Checking clearance from a keepout');
-        const required=Math.max(k.clearance??netClearance(p.net),fillRule(p.object,'clearance')),actual=distanceShapes(p.shape,k.shape);
+        const required=k.clearance??netClearance(p.net),actual=distanceShapes(p.shape,k.shape);
         if(actual+EPS<required||actual<=EPS)violation('keepout',`k:${p.object.uid}:${index}:${p.layer}`,{kind:p.object.kind,index:p.object.index,keepout:index,net:p.net,layer:p.layer,actual,required});
       }
     }
     const count=type=>violations.filter(v=>type.includes(v.type)).length;
     activityDone(activity);
-    return {clearanceViolations:count(['clearance','short']),belowNominalWidthTraceCount:widthDeviations.length,
+    return {clearanceViolations:count(['clearance','short','via_spacing']),belowNominalWidthTraceCount:widthDeviations.length,
       viaInPadViolations:count(['via_in_pad']),outlineViolations:count(['outline']),keepoutViolations:count(['keepout']),
       totalViolations:violations.length+widthDeviations.length,violations,widthDeviations};
   }
@@ -608,12 +629,12 @@ function createRamenGeometry(onActivity=null) {
       traceLengthMm:traceLength*(board.units?.mmPerUnit??1),clearanceViolations:validation.clearanceViolations,drcChecked:true,
       belowNominalWidthTraceCount:validation.belowNominalWidthTraceCount,widthRulesChecked:true,
       totalViolations:validation.totalViolations,viaInPadViolations:validation.viaInPadViolations,outlineViolations:validation.outlineViolations,keepoutViolations:validation.keepoutViolations,
-      copperZoneCount:(board.copperZones||[]).length,copperFillCount:(board.copperFills||[]).length,
+      copperFillCount:(board.copperFills||[]).length,
       netCount:(board.nets||[]).length,componentCount:new Set((board.pads||[]).map(p=>p.component)).size,layerCount:(board.layers||[]).length};
   }
   return {EPS,distance,distancePointSegment,pointInPolygon,pointInShape,pointInBoard,pointOnSegment,segmentIntersection,closestPointOnSegment,
     closestSegmentPoints,distanceSegments,closestShapePoints,distanceShapes,distancePointShape,distanceSegmentShape,nearestPointOnShape,
-    shapeBounds,boxesOverlap,spatialIndex,unionFind,copper,contactChecker,connectivity,boundaryEdges,shapeInsideBoard,clearance,padEscapeLimit,isPermittedLayerEscape,validate,stats};
+    shapeBounds,boxesOverlap,spatialIndex,unionFind,copper,contactChecker,connectivity,boundaryEdges,shapeInsideBoard,clearance,viaLayers,viaDiameter,samePhysicalVia,viaSpacing,padEscapeLimit,isPermittedLayerEscape,validate,stats};
 }
 globalThis.createRamenGeometry=createRamenGeometry;
 if(typeof module!=='undefined'&&module.exports)module.exports={createRamenGeometry};

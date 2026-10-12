@@ -54,7 +54,7 @@ If the board is complete, the export button gets a gentle highlight. If somethin
 
 Load your partly or fully routed DSN, then choose **Clear routing & start over** below the filename.
 
-Save any result you want to keep first. After confirmation, this removes all traces and routing vias, including fixed or protected ones. Components, pads, connections, copper areas, the board outline and board rules stay in place. Copper is rebuilt, and the original file on your computer is unchanged.
+Save any result you want to keep first. After confirmation, this removes all traces and routing vias, including fixed or protected ones. Components, pads, connections, imported copper, the board outline and board rules stay in place. The original file on your computer is unchanged.
 
 Check the cleared board, then click **Start routing** when you're ready.
 
@@ -72,6 +72,10 @@ Open **Routing rules → Routing options**. **Apply rules** saves your changes; 
 Changing these options keeps your current result and affects the next run.
 
 If connections remain with alternating directions enabled, you can choose to turn that preference off and retry. If vias in SMD pads might help, you can choose **Enable and reroute** or **Keep current rules**. Neither setting changes unless you choose it. Download the current result before retrying if you want to keep it.
+
+Separate vias keep their copper clearance, even when they belong to the same net. Allowing a via in a pad doesn't allow two vias to overlap.
+
+Via circles show the outer copper diameter from your DSN at the same scale as the pads and tracks. Drill-hole sizes aren't guessed. Check the drill sizes and your manufacturer's rules in your PCB editor before ordering.
 
 ## Give particular nets their own rules
 
@@ -109,7 +113,7 @@ Applying per-net changes returns the board to its input routing, including its i
 
 If existing traces conflict with your layer choices, change the selection or use **Clear routing & start over**. Check any warnings, then start a new run.
 
-Exported DSN files keep your layer choices, SMD-via rule and shorter-route preferences for reopening in RamenRouter. Temporary copper settings are saved separately.
+Exported DSN files keep your layer choices, SMD-via rule and shorter-route preferences for reopening in RamenRouter.
 
 ## Same board, another revision?
 
@@ -123,47 +127,11 @@ Choose **Use imported rules**, close the dialog or press Escape to keep the new 
 
 The latest board's net choices are remembered in this browser when local storage is available. If saving is blocked, they're available only while the page stays open. This remembers matching details, the filename and per-net choices. It doesn't save the board geometry, copper or routed result. Nothing is uploaded.
 
-## Let a copper plane do some of the work
+## Routes ready for your PCB editor
 
-I don't want a long trace for every GND connection if a copper plane can do the job.
+RamenRouter connects your nets with traces and vias. It only counts copper already present in your imported board; it does not create copper fills to stand in for missing routes.
 
-Open **Copper fills** after loading your board. Use **Add whole-board fill** for a whole layer, or **Draw a copper area** to plot your own boundary. Pick the net and layer, such as GND on the bottom layer. Add as many areas as you need, then edit or delete them later. To reuse a shape on another layer, select it and choose **Copy area**. The copy keeps the boundary, cutouts and settings; edit it before applying.
-
-These are temporary areas used while routing in RamenRouter. Set up matching copper pours in your PCB editor for the actual board: the same net, layer, boundaries and connection settings.
-
-### Set up the fill
-
-Choose **Solid**, **Grid · 45°** or **Grid · 90°**. For grids, set the spacing and copper line width.
-
-Choose **Direct** to connect pads straight to the surrounding copper, or **Spokes** for short copper bridges across a gap. Set the spoke gap and width, clearance from other nets, and clearance from the board edge. Your imported net clearance remains the minimum.
-
-Leave **Keep unconnected islands** off to remove isolated copper with no connection to the net. Turning it on keeps those islands; it doesn't make them connected.
-
-### Draw exactly where you want it
-
-Click to place each boundary point. Choose **Finish shape**, press Enter or click the first point to close it.
-
-**Undo point**, Backspace or right-click removes the last point. Scroll to zoom. **Cancel** or Escape leaves the previous shape in place.
-
-Use **Draw a cutout** wherever you want this area to stay clear. You can redraw or delete each cutout. Existing board keepouts are respected too.
-
-Choose **Apply & rebuild** to build the temporary fill and check its connections. The sidebar and board show the pending area count and progress while it works. Your previous copper stays visible until the new areas are ready. Choose **Cancel copper changes** to keep the previous board and result. Routing and copper-editing controls wait until it finishes or is cancelled.
-
-The preview shows the filled result with its gaps and cutouts. The **Copper fills** checkbox only controls visibility.
-
-A pad on another layer still needs a legal via or pad escape to reach the connected plane. An isolated bit of copper won't finish a connection.
-
-### Keep copper settings separate
-
-**If your imported DSN has no copper fills, your exported DSN has none either.** Original imported copper is kept. SES contains tracks and vias only. Temporary fills you add here stay in RamenRouter.
-
-When exporting with temporary areas, choose **Save settings & export**, **Export routes only**, or cancel. The first option saves a separate copper settings file alongside your routes. You can also use **Save copper settings** after applying the areas.
-
-Next time you load a board, choose a saved settings file when prompted, or carry on without one. You can load it later through **Copper fills → Load copper settings**. Nothing is applied automatically. The file is checked against the board before rebuilding the areas.
-
-Back in EasyEDA, refill your matching copper pours and check connectivity and design rules. **A route that uses a plane needs that plane to make the connection.** Importing the tracks and vias alone won't supply it.
-
-The separate settings file is for loading back into RamenRouter. It isn't an EasyEDA copper import file.
+If your file contains copper areas, use **Imported copper** to show or hide them in the preview. DSN keeps your imported copper. SES contains tracks and vias, so import it back into the same board in your PCB editor.
 
 ## Board won't finish?
 
