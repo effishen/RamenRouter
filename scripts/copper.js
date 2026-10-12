@@ -6,6 +6,27 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
   const EPS=G.EPS||1e-8,cache=new WeakMap(),sharedCache=new Map(),derivedCache=new Map(),MAX_VERTICES=2048,MAX_ZONES=64,MAX_HATCH_LINES=4000;
   const MAX_SHARED_BYTES=6*1024*1024,MAX_DERIVED_BYTES=12*1024*1024;
   let sharedBytes=0,derivedBytes=0,derivedToken=0;
+  // Private integer geometry is keyed by its contents. Routing and repair
+  // clone and edit objects, so identity cannot establish reuse safely.
+  const expandedCache=new Map(),safeCache=new Map();
+  const MAX_EXPANDED_BYTES=8*1024*1024,MAX_SAFE_BYTES=4*1024*1024;
+  let expandedBytes=0,safeBytes=0;
+  function reusePaths(cache,sig,make,kind){
+    const old=cache.get(sig);
+    if(old){cache.delete(sig);cache.set(sig,old);return old.paths;}
+    const paths=make(),bytes=sig.length*2+paths.reduce((n,path)=>n+path.length*64+64,0);
+    const budget=kind==='expanded'?MAX_EXPANDED_BYTES:MAX_SAFE_BYTES;
+    const limit=kind==='expanded'?4096:128;
+    if(bytes<=budget){
+      cache.set(sig,{paths,bytes});
+      if(kind==='expanded')expandedBytes+=bytes;else safeBytes+=bytes;
+      while(cache.size>limit||(kind==='expanded'?expandedBytes:safeBytes)>budget){
+        const first=cache.keys().next().value,record=cache.get(first);cache.delete(first);
+        if(kind==='expanded')expandedBytes-=record.bytes;else safeBytes-=record.bytes;
+      }
+    }
+    return paths;
+  }
   const key=net=>G.netKey?G.netKey(net):String(net);
   const fail=message=>{throw new Error('Copper fill: '+message);};
   const area=points=>points.reduce((sum,p,i)=>{const q=points[(i+1)%points.length];return sum+p[0]*q[1]-q[0]*p[1];},0)/2;
@@ -124,10 +145,16 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
       for(let i=0;i<=count;i++){const t=angle-Math.PI/2+Math.PI*i/count;points.push([b[0]+Math.cos(t)*radius,b[1]+Math.sin(t)*radius]);}
       for(let i=0;i<=count;i++){const t=angle+Math.PI/2+Math.PI*i/count;points.push([a[0]+Math.cos(t)*radius,a[1]+Math.sin(t)*radius]);}return [path(points)];
     }
-    function expanded(shape,clearance) {
+    function rawExpanded(shape,clearance) {
       if(shape.type==='circle')return [circle(shape.cx,shape.cy,shape.r+clearance)];
       if(shape.type==='capsule')return capsule(shape.a,shape.b,shape.r+clearance);
       return offset(filledPaths(shape),clearance+guard);
+    }
+    function expanded(shape,clearance) {
+      const sig=JSON.stringify([S,guard,shape,clearance]);
+      // Clipper copies source points. Preserve the exact original obstacle
+      // order and global union; reuse only unchanged expanded input paths.
+      return reusePaths(expandedCache,sig,()=>rawExpanded(shape,clearance),'expanded');
     }
     function components(paths) {
       if(!paths.length)return [];
@@ -154,16 +181,17 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
     const getBoundary=()=>boundary||(boundary=board.outlines?.length?unite(board.outlines.map(poly=>path(poly))):[path([[bounds.minX,bounds.minY],[bounds.maxX,bounds.minY],[bounds.maxX,bounds.maxY],[bounds.minX,bounds.maxY]])]);
     const boardHoles=(board.holes||[]).map(h=>path(h.points||h)),baseCopper=G.copper({...board,copperFills:immutableFills}).primitives;
     const produced=[],sameNet=new Map(),hasPotentialAnchor=new Map();
+    const touches=G.contactChecker?G.contactChecker():(a,b)=>G.distanceShapes(a,b)<=EPS;
     for(let zi=0;zi<zones.length;zi++) {
       const zone=zones[zi];aborted(cancel);
       if(!zone.enabled){emit?.({stage:'copper-fill',message:zone.name+' is switched off',processed:zi+1,total:zones.length,layer:zone.layer,netId:zone.net});yield;continue;}
-      emit?.({stage:'copper-fill',message:'Filling '+zone.name,processed:zi,total:zones.length,layer:zone.layer,netId:zone.net});yield;
+      emit?.({stage:'copper-fill',message:'Checking '+zone.name,processed:zi,total:zones.length,layer:zone.layer,netId:zone.net});yield;
       // A joined same-net pour is one physical object; apply its most
       // restrictive source clearance throughout rather than weakening any
       // section when separate zones meet.
       const siblings=zones.filter(other=>other.enabled&&other.net===zone.net&&other.layer===zone.layer),effectiveClearance=Math.max(...siblings.map(other=>other.clearance));
       const siblingKey=key(zone.net)+':'+zone.layer;
-      if(!hasPotentialAnchor.has(siblingKey))hasPotentialAnchor.set(siblingKey,options.keepUnanchored||siblings.some(other=>other.keepIslands)||baseCopper.some(p=>p.layer===zone.layer&&key(p.net)===key(zone.net)&&siblings.some(other=>{const shape={type:'polygon',points:other.points,holes:other.cutouts};return G.boxesOverlap(p.bounds,G.shapeBounds(shape))&&G.distanceShapes(p.shape,shape)<=EPS;})));
+      if(!hasPotentialAnchor.has(siblingKey))hasPotentialAnchor.set(siblingKey,options.keepUnanchored||siblings.some(other=>other.keepIslands)||baseCopper.some(p=>p.layer===zone.layer&&key(p.net)===key(zone.net)&&siblings.some(other=>{const shape={type:'polygon',points:other.points,holes:other.cutouts};return G.boxesOverlap(p.bounds,G.shapeBounds(shape))&&touches(p.shape,shape);})));
       // Entirely unanchored groups will be removed. Avoid reserving phantom
       // priority against later foreign-net zones for these empty groups.
       if(!hasPotentialAnchor.get(siblingKey)){emit?.({stage:'copper-fill',message:zone.name+' has no pad or route to connect to',processed:zi+1,total:zones.length,layer:zone.layer,netId:zone.net});yield;continue;}
@@ -179,9 +207,13 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
       let zoneRecord=derived(zoneSignature),entries;
       if(zoneRecord)entries=zoneRecord.entries;
       else {
-        let safe=intersection([path(zone.points)],offset(getBoundary(),-edge));
-        const cuts=[...boardHoles.map(p=>offset([p],edge)).flat(),...zone.cutouts.map(p=>offset([path(p)],guard)).flat()];
-        safe=difference(safe,unite(cuts));
+        emit?.({stage:'copper-fill',message:'Filling '+zone.name,processed:zi,total:zones.length,layer:zone.layer,netId:zone.net});yield;
+        const safeSignature=JSON.stringify([S,guard,zone.points,zone.cutouts,board.outlines,board.bounds,board.holes,edge]);
+        let safe=reusePaths(safeCache,safeSignature,()=>{
+          let mask=intersection([path(zone.points)],offset(getBoundary(),-edge));
+          const cuts=[...boardHoles.map(p=>offset([p],edge)).flat(),...zone.cutouts.map(p=>offset([path(p)],guard)).flat()];
+          return difference(mask,unite(cuts));
+        },'safe');
         const obstacles=[];
         for(let pi=0;pi<foreign.length;pi++){const p=foreign[pi];
           obstacles.push(...expanded(p.shape,Math.max(effectiveClearance,G.clearance(board,zone.net,p.net))));
@@ -221,7 +253,7 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
       for(const fill of entries){produced.push({...fill,net:zone.net,layer:zone.layer,zoneId:zone.id,clearance:effectiveClearance});}
       const groupKey=key(zone.net)+':'+zone.layer;if(!sameNet.has(groupKey))sameNet.set(groupKey,{net:zone.net,layer:zone.layer,zones:[],parts:[],entries:[]});
       const group=sameNet.get(groupKey);group.zones.push(zone.id);group.parts.push(zoneRecord.token);group.entries.push(...entries);
-      emit?.({stage:'copper-fill',message:zone.name+' filled',processed:zi+1,total:zones.length,layer:zone.layer,netId:zone.net});yield;
+      emit?.({stage:'copper-fill',message:zone.name+' copper ready',processed:zi+1,total:zones.length,layer:zone.layer,netId:zone.net});yield;
     }
     const fills=immutableFills.slice();
     for(const group of sameNet.values()){
@@ -230,13 +262,15 @@ function createRamenCopper(G, C, yieldTask=()=>Promise.resolve()) {
       let groupRecord=derived(groupSignature);
       if(!groupRecord){const entries=components(unite(group.entries.flatMap(filledPaths))).map(fill=>{
         const shape={type:'polygon',points:fill.points,holes:fill.holes};
-        const zoneIds=[...new Set(produced.filter(p=>p.net===group.net&&p.layer===group.layer&&G.boxesOverlap(G.shapeBounds(shape),G.shapeBounds({type:'polygon',points:p.points}))&&G.distanceShapes(shape,{type:'polygon',points:p.points,holes:p.holes})<=EPS).map(p=>p.zoneId))];
+        const bounds=G.shapeBounds(shape);
+        const zoneIds=group.zones.length===1?group.zones.slice():[...new Set(produced.filter(p=>p.net===group.net&&p.layer===group.layer&&G.boxesOverlap(bounds,G.shapeBounds({type:'polygon',points:p.points}))&&touches(shape,{type:'polygon',points:p.points,holes:p.holes})).map(p=>p.zoneId))];
         return {zoneId:zoneIds[0]||group.zones[0],zoneIds,net:group.net,layer:group.layer,points:fill.points,holes:fill.holes};
       });groupRecord=derived(groupSignature,entries);}
       const contacts=baseCopper.filter(p=>p.layer===group.layer&&key(p.net)===key(group.net));
       for(const fill of groupRecord.entries){
         const shape={type:'polygon',points:fill.points,holes:fill.holes};
-        const anchored=options.keepUnanchored||fill.zoneIds.some(id=>zones.find(zone=>zone.id===id)?.keepIslands)||contacts.some(p=>G.boxesOverlap(p.bounds,G.shapeBounds(shape))&&G.distanceShapes(p.shape,shape)<=EPS);
+        const bounds=G.shapeBounds(shape);
+        const anchored=options.keepUnanchored||fill.zoneIds.some(id=>zones.find(zone=>zone.id===id)?.keepIslands)||contacts.some(p=>G.boxesOverlap(p.bounds,bounds)&&touches(p.shape,shape));
         if(anchored)fills.push(copy(fill));
       }
       yield;
