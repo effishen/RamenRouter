@@ -598,12 +598,17 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask, copper) {
       for(const order of [ascending,ascending.slice().reverse(),byId,byId.slice().reverse(),shuffled(neighbours,rng(0x434C5553+net.id*131+repairRound)),shuffled(neighbours,rng(0x434C5553+net.id*131+repairRound+7919))]){
         prioritizeShort(order);const key=order.map(n=>n.id).join(',');if(!seen.has(key)){seen.add(key);orders.push(order);}
       }
+      // Keep connected branches during the first repair. Exact crossed item
+      // indices refer to the snapshot; trials copy its objects independently.
+      const crossedTraces=new Set([...blocked.traces].map(item=>snapshot.traces.indexOf(item)));
+      const crossedVias=new Set([...blocked.vias].map(item=>snapshot.vias.indexOf(item)));
       try{
+        const branchOnly=repairRound===1||repairRound===7;
         for(let orderIndex=0;orderIndex<orders.length&&!stopped();orderIndex++){
           board=copy(snapshot);generation++;
-          const removable=(item,index,prefix)=>index>=prefix&&blocked.has(item.net)&&!item.fixed&&!item.fanout;
-          board.traces=board.traces.filter((t,i)=>!removable(t,i,original.traces.length));
-          board.vias=board.vias.filter((v,i)=>!removable(v,i,original.vias.length));
+          const removable=(item,index,prefix,crossed)=>index>=prefix&&blocked.has(item.net)&&!item.fixed&&!item.fanout&&(!branchOnly||crossed.has(index));
+          board.traces=board.traces.filter((t,i)=>!removable(t,i,original.traces.length,crossedTraces));
+          board.vias=board.vias.filter((v,i)=>!removable(v,i,original.vias.length,crossedVias));
           board.traces.push(...copy(copper.traces));
           for(const v of copper.vias)if(!board.vias.some(w=>w.net===v.net&&Math.hypot(w.x-v.x,w.y-v.y)<EPS))board.vias.push(copy(v));
           generation++;
