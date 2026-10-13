@@ -13,7 +13,7 @@
   let job = null, worker = null, workerUrl = null, inputText = null;
   let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, scaleTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.4.1',engineVersion:'Ramen JS 0.4.1',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.4.2',engineVersion:'Ramen JS 0.4.2',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
     const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
@@ -148,7 +148,7 @@
     if(!routingOperations.has(job.operation))watchdog=setTimeout(()=>{if(id===serial&&job&&active.has(job.state))stopWithBest('timed_out',"This step ran past its time limit and was stopped.");},timeLimit+30000);
   }
   function getSettings(value={}) {
-    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
+    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,boardEdgeClearanceMm:null,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
     // Layer-access-only preparation is derived by the router, never an external setting.
     delete s.layerAccessOnly;
     for(const k of ['fanout','fanoutOnly','optimize','deepSearch','flexibleFinishing','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
@@ -156,6 +156,7 @@
       if(!Number.isFinite(s[k])||!Number.isInteger(s[k])||s[k]<min||s[k]>max) throw new Error(k+" needs a whole number between "+min+' and '+max+'.');
     }
     if(s.quality!=='balanced')throw new Error("This routing quality setting isn’t supported.");
+    if(s.boardEdgeClearanceMm!==null&&(!Number.isFinite(s.boardEdgeClearanceMm)||s.boardEdgeClearanceMm<0||s.boardEdgeClearanceMm>1000))throw new Error('Board-edge clearance needs a number between 0 and 1000 mm, or use the file\'s rule.');
     for(const key of ['gridStep','viaCost'])if(s[key]!==undefined&&(!Number.isFinite(s[key])||s[key]<=0))throw new Error(key+" needs a number greater than zero.");
     if(s.fanoutOnly) s.fanout=true;
     return s;
@@ -266,7 +267,7 @@
         pads.push(item);
       }
       const air=(connection||geo.connectivity(b)).airwires||[];
-      return {units:'mm',boardScale:b.boardScale,bounds:[b.bounds.minX*s,b.bounds.minY*s,b.bounds.maxX*s,b.bounds.maxY*s],
+      return {units:'mm',boardScale:b.boardScale,boardEdgeClearanceMm:geo.boardEdgeClearance(b)*s,bounds:[b.bounds.minX*s,b.bounds.minY*s,b.bounds.maxX*s,b.bounds.maxY*s],
         layers:b.layers.map(l=>({id:l.index,name:l.name,signal:true})),
         traces:(b.traces||[]).map(t=>({layer:t.layer,width:t.width*s,points:t.points.map(p),net:name(t.net)})),pads,
         vias:(b.vias||[]).map(v=>({x:v.x*s,y:v.y*s,radius:v.diameter*s/2,net:name(v.net),fromLayer:Math.min(...v.layers),toLayer:Math.max(...v.layers)})),
@@ -290,7 +291,7 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.4.1',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name)},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.4.2',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name),boardEdgeClearanceMm:geo.boardEdgeClearance(result)*result.units.mmPerUnit},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
@@ -307,14 +308,15 @@
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
         const bestAction=m.type==='refine-best'||m.type==='flexible-finish';
-        managedBudget=m.type==='run'||bestAction;measurement=managedBudget?benchmark.createCollector({appVersion:'0.4.1',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,operation:m.type,settings:benchmark.cleanSettings(m.options),appVersion:'0.4.1',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        managedBudget=m.type==='run'||bestAction;measurement=managedBudget?benchmark.createCollector({appVersion:'0.4.2',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,operation:m.type,settings:benchmark.cleanSettings(m.options),appVersion:'0.4.2',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
         if(bestAction)measurement?.markContinuation?.();
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
         const importedBoard=measured('reading',()=>dsn.parse(m.text,m.name));
         if(bestAction&&(!m.seedBoard||m.seedBoard.originalText!==m.text||m.seedBoard.filename!==importedBoard.filename||!m.seedBoard._ast))throw new Error('The checked board changed. Choose the current best result and try again.');
         const b=bestAction?structuredClone(m.seedBoard):importedBoard;measurement?.setNets(b.nets);
+        if(m.type!=='inspect')geo.applyBoardEdgeClearance(b,m.options.boardEdgeClearanceMm);
         // Apply the run's chosen policy before checking or saving its input fallback.
         if(m.type==='run'&&typeof m.options.viaInPad==='boolean'){
           b.viaAtSmd=m.options.viaInPad;for(const def of b.viaDefs)def.attachAllowed=m.options.viaInPad;

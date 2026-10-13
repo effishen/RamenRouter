@@ -74,7 +74,7 @@ function createRamenFlexibleFinisher(geometry, yieldTask) {
       beamWidth:clamp(options.beamWidth,4,1,4),maxNudgeDepth:clamp(options.maxNudgeDepth,3,1,3)};
     const hasHostClock=typeof yieldTask?.now==='function',clock=hasHostClock?()=>yieldTask.now():()=>Date.now();
     const started=clock(),measurement=yieldTask?.measurement,finishMeasurement=measurement?.begin('refining');
-    let board=copy(input),attempts=0,nudges=0,edgeChecks=0,commits=0,lastYield=Date.now(),lastProgress=-Infinity,pausedMillis=0,lastPathFrontier=1,lastConnectFrontier=1;
+    let board=G.applyBoardEdgeClearance(copy(input),options.boardEdgeClearanceMm),attempts=0,nudges=0,edgeChecks=0,commits=0,lastYield=Date.now(),lastProgress=-Infinity,pausedMillis=0,lastPathFrontier=1,lastConnectFrontier=1;
     board.traces=board.traces||[];board.vias=board.vias||[];
     const diagnostics={stage:'flexible-finishing',limits,accepted:0,rejected:0,nudgesTried:0,edgeChecks:0,reason:null};
     const activeElapsed=()=>Math.max(0,clock()-started-(hasHostClock?0:pausedMillis));
@@ -159,12 +159,12 @@ function createRamenFlexibleFinisher(geometry, yieldTask) {
       }
       return null;
     }
-    const geometrySignature=JSON.stringify([input.pads,input.outlines,input.holes,input.keepouts,input.layers,input.nets,input.viaDefs,input.units,input.bounds]);
+    const geometrySignature=JSON.stringify([board.pads,board.outlines,board.holes,board.keepouts,board.layers,board.nets,board.viaDefs,board.units,board.bounds,board.edgeClearance,board.boardEdgeClearanceMm]);
     const originalConnection=checkedConnection(board),originalPartitions=padPartitions(originalConnection),originalAnchors=protectedAttachments(board,originalConnection,options),originalValidation=G.validate(board);
     let connection=originalConnection,validation=originalValidation,requiredPartitions=originalPartitions,requiredAnchors=originalAnchors;
     async function consider(candidate,previousConnection) {
       if(stopped())return false;attempts++;measurement?.count('refinementCandidates');
-      if(JSON.stringify([candidate.pads,candidate.outlines,candidate.holes,candidate.keepouts,candidate.layers,candidate.nets,candidate.viaDefs,candidate.units,candidate.bounds])!==geometrySignature)return false;
+      if(JSON.stringify([candidate.pads,candidate.outlines,candidate.holes,candidate.keepouts,candidate.layers,candidate.nets,candidate.viaDefs,candidate.units,candidate.bounds,candidate.edgeClearance,candidate.boardEdgeClearanceMm])!==geometrySignature)return false;
       if(!await pause())return false;
       const next=checkedConnection(candidate);
       if(halted())return false;

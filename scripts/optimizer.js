@@ -56,7 +56,7 @@ function createRamenOptimizer(geometry, yieldTask) {
   async function cleanup(input,options={},emit=()=>{},isCancelled=()=>false,reportWork=()=>{}){
     const empty={board:input,changed:false,removedTraces:0,trimmedTraces:0,removedVias:0};
     if(options.cleanupDangling===false||isCancelled())return empty;
-    let board=clone(input),removedTraces=0,trimmedTraces=0,removedVias=0,processed=0,lastYield=Date.now();
+    let board=G.applyBoardEdgeClearance(clone(input),options.boardEdgeClearanceMm),removedTraces=0,trimmedTraces=0,removedVias=0,processed=0,lastYield=Date.now();
     const measurement=yieldTask?.measurement;
     const connections=()=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     const initial=connections(),required=padPartitions(initial),nets=new Map(board.nets.map(net=>[String(net.id),net]));
@@ -147,7 +147,7 @@ function createRamenOptimizer(geometry, yieldTask) {
 
     const detail=(message,activity={},force=false)=>{const now=Date.now();if(!force&&now-lastDetail<1200)return;lastDetail=now;emit({type:'progress',phase:'optimizing',message,activity});};
     detail('Checking the route before refinement',{stage:'refinement-check'},true);await pause();
-    let board=clone(input);work('checking',0,2,true);const base=validate(board);work('checking',1,2,true);const initialConnections=connectivity(board),requiredPads=padPartitions(initialConnections),requiredProtected=protectedPartitions(input,initialConnections,options);let unrouted=initialConnections.unrouted;work('checking',2,2,true);
+    let board=G.applyBoardEdgeClearance(clone(input),options.boardEdgeClearanceMm);work('checking',0,2,true);const base=validate(board);work('checking',1,2,true);const initialConnections=connectivity(board),requiredPads=padPartitions(initialConnections),requiredProtected=protectedPartitions(input,initialConnections,options);let unrouted=initialConnections.unrouted;work('checking',2,2,true);
     let changed=0,removed=0;
     const originalLength=board.traces.reduce((s,t)=>s+length(t.points),0);
     const cleaned=await cleanup(board,options,emit,isCancelled,reportWork);board=cleaned.board;removed+=cleaned.removedVias;unrouted=connectivity(board).unrouted;
@@ -172,7 +172,7 @@ function createRamenOptimizer(geometry, yieldTask) {
       const obstacleIndex=G.spatialIndex(primitives,Math.max((board.bounds.maxX-board.bounds.minX)/40,trace.width*4));
       function safe(a,b){
         const shape={type:'capsule',a,b,r:trace.width/2,layer:trace.layer};
-        if(!G.shapeInsideBoard(shape,board,edges,board.edgeClearance||0))return false;
+        if(!G.shapeInsideBoard(shape,board,edges))return false;
         for(const other of obstacleIndex.query(G.shapeBounds(shape),maxClearance+EPS)){
           const clearance=G.clearance(board,trace.net,other.net);
           if(G.distanceShapes(shape,other.shape)+EPS<clearance)return false;

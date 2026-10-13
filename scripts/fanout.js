@@ -21,7 +21,7 @@ function createRamenFanout(geometry, yieldTask) {
     const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     const clock=typeof yieldTask?.now==='function'?yieldTask.now:Date.now;
-    const board=copy(input),log=[],started=clock(),deadline=yieldTask?.managesBudget?Infinity:started+(options.timeoutMinutes||30)*60000;
+    const board=G.applyBoardEdgeClearance(copy(input),options.boardEdgeClearanceMm),log=[],started=clock(),deadline=yieldTask?.managesBudget?Infinity:started+(options.timeoutMinutes||30)*60000;
     if(typeof options.viaInPad==='boolean'){board.viaAtSmd=options.viaInPad;board.viaInPadApplied=options.viaInPad;board.viaInPadOverride=options.viaInPad;for(const def of board.viaDefs)def.attachAllowed=options.viaInPad;}
     const cancelled=()=>isCancelled()||clock()>deadline;
     let lastDetail=0;
@@ -245,7 +245,7 @@ function createRamenFanout(geometry, yieldTask) {
     const validation=validate();
     if(validation.totalViolations>baseValidation.totalViolations||validation.belowNominalWidthTraceCount>baseValidation.belowNominalWidthTraceCount){
       log.push("Fanout discarded. The final check found new rule issues.");
-      return {board:copy(input),addedVias:0,addedTraces:0,log,stopped:cancelled()};
+      return {board:G.applyBoardEdgeClearance(copy(input),options.boardEdgeClearanceMm),addedVias:0,addedTraces:0,log,stopped:cancelled()};
     }
     log.push("Checked fanout: "+(board.vias.length-initialVias)+' vias and '+(board.traces.length-initialTraces)+" full-width pad escapes across "+rowCount+' dense rows.');
     emit({type:'progress',phase:'fanout',message:log[log.length-1],board:copy(board),stats:G.stats(board,validation,connectivity(board))});

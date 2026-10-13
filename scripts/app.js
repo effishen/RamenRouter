@@ -292,13 +292,14 @@
     if ($('netLayersDialog').open && (job?.id !== netLayersData?.jobId || active)) { discardRoutingRuleDraft(); $('netLayersDialog').close(); }
     const layerSummary = job?.routingRuleSummary || job?.layerRuleSummary;
     const savedOptions = routingOptionsBeforeDialog || readRoutingOptions();
-    const optionSummary = `${number(savedOptions.maxPasses)} attempts · ${number(savedOptions.timeoutMinutes)} min${savedOptions.preferredDirections ? ' · alternating directions' : ''}${savedOptions.benchmarkMode ? ' · fixed-work benchmark' : ''}`;
+    const optionSummary = `${number(savedOptions.maxPasses)} attempts · ${number(savedOptions.timeoutMinutes)} min${Number.isFinite(savedOptions.boardEdgeClearanceMm) ? ' · ' + number(savedOptions.boardEdgeClearanceMm, 4) + ' mm edge gap' : ''}${savedOptions.preferredDirections ? ' · alternating directions' : ''}${savedOptions.benchmarkMode ? ' · fixed-work benchmark' : ''}`;
     $('netLayersSummary').textContent = optionSummary + (layerSummary ? ` · ${number(layerSummary.restrictedNets)} nets with layer limits · ${number(layerSummary.shortRouteNets || 0)} prefer shorter routes` : '');
     const layerConflicts = layerSummary?.conflictingTraces || 0;
     $('netLayerConflict').hidden = !layerConflicts || active;
     $('netLayerConflict').textContent = layerConflicts ? `${number(layerConflicts)} existing ${layerConflicts === 1 ? 'trace uses' : 'traces use'} a layer you have not selected, and cannot count as a short pad escape. Choose “Clear routing & start over”, or change the allowed layers.` : '';
     updateNetLayerDraftStatus();
     for (const control of $('settingsForm').elements) control.disabled = !available || active;
+    $('boardEdgeClearanceMm').disabled = !available || active || !$('boardEdgeClearanceEnabled').checked;
     if (available && !active) {
       const fanoutOnly = $('fanout').checked && $('fanoutOnly').checked;
       $('optimize').disabled = fanoutOnly; $('deepSearch').disabled = fanoutOnly;
@@ -874,6 +875,7 @@
     if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules', 'updating_scale'].includes(job.state) && !['clearing', 'updating_rules', 'updating_scale'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
       for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
       for (const key of ['maxPasses', 'timeoutMinutes']) if (typeof job.settings[key] === 'number') $(key).value = job.settings[key];
+      writeBoardEdgeClearance(job.settings);
     }
     if (job?.state === 'stopping') stoppingSince ??= Date.now();
     else { stoppingSince = null; forcedStop = false; }
@@ -1560,12 +1562,21 @@
   }
 
   function readRoutingOptions() {
-    return { deepSearch: $('deepSearch').checked, flexibleFinishing: $('flexibleFinishing').checked, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
+    return { deepSearch: $('deepSearch').checked, flexibleFinishing: $('flexibleFinishing').checked, boardEdgeClearanceMm: $('boardEdgeClearanceEnabled').checked ? Number($('boardEdgeClearanceMm').value) : null, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
+  }
+
+  function writeBoardEdgeClearance(settings) {
+    if (!Object.prototype.hasOwnProperty.call(settings, 'boardEdgeClearanceMm')) return;
+    const enabled = Number.isFinite(settings.boardEdgeClearanceMm) && settings.boardEdgeClearanceMm >= 0 && settings.boardEdgeClearanceMm <= 1000;
+    $('boardEdgeClearanceEnabled').checked = enabled;
+    $('boardEdgeClearanceMm').value = enabled ? settings.boardEdgeClearanceMm : 0.2;
+    $('boardEdgeClearanceMm').disabled = !enabled;
   }
 
   function writeRoutingOptions(settings) {
     for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
     for (const key of ['maxPasses', 'timeoutMinutes']) if (Number.isFinite(settings[key])) $(key).value = settings[key];
+    writeBoardEdgeClearance(settings);
   }
 
   function getSettings() {
@@ -1598,6 +1609,7 @@
       for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
       if (Number.isInteger(settings.maxPasses) && settings.maxPasses >= 1 && settings.maxPasses <= 100) $('maxPasses').value = settings.maxPasses;
       if (Number.isInteger(settings.timeoutMinutes) && settings.timeoutMinutes >= 1 && settings.timeoutMinutes <= 1440) $('timeoutMinutes').value = settings.timeoutMinutes;
+      writeBoardEdgeClearance(settings);
     } catch {}
   }
 

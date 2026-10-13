@@ -495,7 +495,20 @@ function createRamenGeometry(onActivity=null) {
       }
     }return result;
   }
-  function shapeInsideBoard(shape,board,edges=boundaryEdges(board),edgeClearance=board.edgeClearance||0) {
+  function applyBoardEdgeClearance(board,clearanceMm) {
+    if(clearanceMm===null||clearanceMm===undefined)return board;
+    if(!Number.isFinite(clearanceMm)||clearanceMm<0||clearanceMm>1000)throw new Error('Board-edge clearance needs a number between 0 and 1000 mm.');
+    board.boardEdgeClearanceMm=clearanceMm;return board;
+  }
+  function boardEdgeClearance(board,kind='trace') {
+    if((kind==='trace'||kind==='via')&&Number.isFinite(board.boardEdgeClearanceMm)) {
+      const scale=board.units?.mmPerUnit;
+      if(!Number.isFinite(scale)||scale<=0)throw new Error('Check the board scale before setting its edge clearance.');
+      return board.boardEdgeClearanceMm/scale;
+    }
+    return board.edgeClearance||0;
+  }
+  function shapeInsideBoard(shape,board,edges=boundaryEdges(board),edgeClearance=boardEdgeClearance(board)) {
     const core=shapeCore(shape);
     if(core.points.some(p=>!pointInBoard(p[0],p[1],board)))return false;
     for(const [a,b] of core.edges){const ts=[0,1],dx=b[0]-a[0],dy=b[1]-a[1];
@@ -618,7 +631,7 @@ function createRamenGeometry(onActivity=null) {
     let outlineCount=0;
     for(const p of primitives){
       if(observesActivity)activityAt(activity,p,null,++outlineCount,primitives.length,'Checking clearance from the board edge');
-      if(!shapeInsideBoard(p.shape,board,edges,board.edgeClearance||0))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
+      if(!shapeInsideBoard(p.shape,board,edges,boardEdgeClearance(board,p.object.kind)))violation('outline',`o:${p.object.uid}:${p.layer}`,{kind:p.object.kind,index:p.object.index,id:p.object.id,net:p.net,layer:p.layer});
       for(const [index,k] of (board.keepouts||[]).entries()){
         if(k.layers&&!k.layers.includes(p.layer)||k.kind==='via'&&p.object.kind!=='via')continue;
         if(observesActivity)activityAt(activity,p,{shape:k.shape,layer:p.layer},outlineCount,primitives.length,'Checking clearance from a keepout');
@@ -643,7 +656,7 @@ function createRamenGeometry(onActivity=null) {
   }
   return {EPS,distance,distancePointSegment,pointInPolygon,pointInShape,pointInBoard,pointOnSegment,segmentIntersection,closestPointOnSegment,
     closestSegmentPoints,distanceSegments,closestShapePoints,distanceShapes,distancePointShape,distanceSegmentShape,nearestPointOnShape,
-    shapeBounds,boxesOverlap,spatialIndex,unionFind,copper,contactChecker,connectivity,boundaryEdges,shapeInsideBoard,clearance,viaLayers,viaDiameter,samePhysicalVia,viaSpacing,padEscapeLimit,isPermittedLayerEscape,validate,stats};
+    shapeBounds,boxesOverlap,spatialIndex,unionFind,copper,contactChecker,connectivity,boundaryEdges,shapeInsideBoard,applyBoardEdgeClearance,boardEdgeClearance,clearance,viaLayers,viaDiameter,samePhysicalVia,viaSpacing,padEscapeLimit,isPermittedLayerEscape,validate,stats};
 }
 globalThis.createRamenGeometry=createRamenGeometry;
 if(typeof module!=='undefined'&&module.exports)module.exports={createRamenGeometry};

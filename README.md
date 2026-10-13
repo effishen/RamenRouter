@@ -50,6 +50,14 @@ The job overview shows **Attempt #**, **Time left**, **Refinement** and **Finish
 
 The activity line and log explain what RamenRouter is working on. **Live work** highlights the pads, vias, search paths and checks happening on the board. Trial paths are shown separately from completed tracks. The preview shows a sample of the work, so you won't see every search. Turn it off if you prefer a quiet display. Reduced-motion settings keep the highlights still.
 
+## Keep routes away from the board edge
+
+In **Routing rules → Routing options**, turn on **Avoid board edge** and enter the **Minimum gap** in millimetres, for example **0.2 mm**. The gap is measured from the outside copper of each trace or via to the outline, including board cutouts. A 0.2 mm wide trace needs its centre at least 0.3 mm from the edge when the gap is 0.2 mm. Routing, pad escapes, refinement and flexible finishing use the same distance.
+
+Leave the option off to use the imported file's edge rule, or its general clearance when no separate edge rule is available. Component and pad positions stay as imported. Existing traces and vias are checked against your choice; violations are reported and the imported copper is retained. If needed, use **Clear routing & start over** before routing again.
+
+The choice is saved for your next run and recorded in routed DSN exports for reuse in RamenRouter. The SES contains the resulting routes; it does not transfer this setting into your PCB editor's rule setup.
+
 ## More time, more attempts, or refine the best
 
 When the time limit runs out, the job pauses at the next safe point. Choose extra minutes and **Extend time** to carry on from there. This also works if it was still preparing the board and hadn't drawn any traces yet. Keep the page open while it's paused.

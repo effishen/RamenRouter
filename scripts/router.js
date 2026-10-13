@@ -39,7 +39,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     return true;
   }
   function preservesModelRules(candidate,reference){
-    return ['pads','nets','layers','units','bounds','boundary','outlines','fills','copperFills','keepouts','viaKeepouts','viaDefs','viaAtSmd','viaInPadApplied','viaInPadOverride','defaultWidth','defaultClearance','defaultViaName','classClearances','crossClassClearance','clearanceMode','structureClearance','edgeClearance'].every(key=>JSON.stringify(candidate[key])===JSON.stringify(reference[key]));
+    return ['pads','nets','layers','units','bounds','boundary','outlines','fills','copperFills','keepouts','viaKeepouts','viaDefs','viaAtSmd','viaInPadApplied','viaInPadOverride','defaultWidth','defaultClearance','defaultViaName','classClearances','crossClassClearance','clearanceMode','structureClearance','edgeClearance','boardEdgeClearanceMm'].every(key=>JSON.stringify(candidate[key])===JSON.stringify(reference[key]));
   }
   const protectedCopper=item=>item.fixed||item.protected||item.locked||item.preserve||item.fanout||item.attachment||['fix','fixed','protect','protected'].includes(item.type)||['fix','protect'].includes(item._dsnType);
   function preservesProtectedCopper(candidate,reference){
@@ -94,7 +94,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
     let best,bestStats,bestConnection;
     const checkpoint=()=>emit({type:'checkpoint',phase,pass:0,board:copy(best),stats:bestStats,validation:copy(reports.get(bestStats)),counters:counterSnapshot()});
     try{
-      best=copy(input);best.traces=best.traces||[];best.vias=best.vias||[];
+      best=copy(input);best.traces=best.traces||[];best.vias=best.vias||[];G.applyBoardEdgeClearance(best,options.boardEdgeClearanceMm);
       const baseline=check(best),initialStats=baseline.stats;bestStats=initialStats;bestConnection=baseline.connection;
       const retain=candidate=>{
         if(!candidate)return false;
@@ -175,7 +175,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       const now=Date.now();if(!force&&now-lastDetail<1200)return;lastDetail=now;
       emit({type:'progress',phase,pass:routeActivity.pass||0,message,activity:{...routeActivity,...activity}});return true;
     };
-    let original=copy(input);original.traces=original.traces||[];original.vias=original.vias||[];
+    let original=copy(input);original.traces=original.traces||[];original.vias=original.vias||[];G.applyBoardEdgeClearance(original,options.boardEdgeClearanceMm);
     if(typeof options.viaInPad==='boolean'){original.viaAtSmd=options.viaInPad;original.viaInPadApplied=options.viaInPad;original.viaInPadOverride=options.viaInPad;for(const v of original.viaDefs)v.attachAllowed=options.viaInPad;}
     const rules=netRules(original),padCounts=new Map(original.nets.map(n=>[n.id,original.pads.filter(p=>p.net===n.id).length])), nets=original.nets.filter(n=>original.pads.filter(p=>p.net===n.id).length>1);
     const shortNets=new Set(nets.filter(n=>n.preferShort===true).map(n=>n.id));
@@ -301,7 +301,7 @@ function createRamenRouter(geometry, optimizer, fanout, yieldTask) {
       return !stopped();
     }
     function allowed(arr,id,net){return arr[id]===0||arr[id]===net;}
-    function inside(x,y,r){r+=original.edgeClearance||0;if(x<original.bounds.minX+r||x>original.bounds.maxX-r||y<original.bounds.minY+r||y>original.bounds.maxY-r)return false;if(original.outlines.length&&!original.outlines.some(p=>G.pointInPolygon(x,y,p)))return false;for(const hole of original.holes||[])if(G.pointInPolygon(x,y,hole))return false;for(const p of [...original.outlines,...(original.holes||[])])for(let k=0;k<p.length;k++)if(segmentDistance(x,y,p[k],p[(k+1)%p.length])<r-EPS)return false;return true;}
+    function inside(x,y,r){r+=G.boardEdgeClearance(original);if(x<original.bounds.minX+r||x>original.bounds.maxX-r||y<original.bounds.minY+r||y>original.bounds.maxY-r)return false;if(original.outlines.length&&!original.outlines.some(p=>G.pointInPolygon(x,y,p)))return false;for(const hole of original.holes||[])if(G.pointInPolygon(x,y,hole))return false;for(const p of [...original.outlines,...(original.holes||[])])for(let k=0;k<p.length;k++)if(segmentDistance(x,y,p[k],p[(k+1)%p.length])<r-EPS)return false;return true;}
     async function getRaster(net){
       const finish=measurement?.begin('preparing');try{
       let lastRasterYield=Date.now();

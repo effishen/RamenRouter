@@ -45,6 +45,22 @@ function createRamenDSN() {
     return shorterNets.length?'; RamenRouter routing rules v1: '+JSON.stringify({shorterNets})+'\n':'';
   }
   const scaleProfiles=new Set(['auto','declared','easyeda-standard']);
+  function boardEdgeClearanceRead(text) {
+    let i=0,record=null;
+    while(i<text.length) {
+      if(/\s/.test(text[i])){i++;continue;}
+      if(text[i]!==';'&&!(text[i]==='#'&&(i===0||text[i-1]==='\n')))break;
+      const start=++i;while(i<text.length&&text[i]!=='\n')i++;
+      const comment=text.slice(start,i).trim();
+      if(!comment.startsWith('RamenRouter board edge clearance'))continue;
+      if(record!==null)fail('This file has more than one saved board-edge clearance.');
+      const prefix='RamenRouter board edge clearance v1:';
+      if(!comment.startsWith(prefix))fail('This version of the saved board-edge clearance is not supported. Try a newer RamenRouter.');
+      try{record=JSON.parse(comment.slice(prefix.length));}catch(_){fail('The saved board-edge clearance is damaged. Try exporting the board again.');}
+      if(!record||typeof record!=='object'||Array.isArray(record)||Object.keys(record).length!==1||!Object.prototype.hasOwnProperty.call(record,'clearanceMm')||!Number.isFinite(record.clearanceMm)||record.clearanceMm<0||record.clearanceMm>1000)fail('The saved board-edge clearance needs a number between 0 and 1000 mm.');
+    }
+    return record;
+  }
   function boardScaleRead(text) {
     let i=0,record=null;
     while(i<text.length) {
@@ -93,7 +109,7 @@ function createRamenDSN() {
       viaDiametersMm:board.viaDefs.map(def=>({name:def.name,diameterMm:def.diameter*mmPerUnit}))};
     return board;
   }
-  function boardMetadataWrite(board,nets=board.nets){return routingRulesWrite(nets)+(board.boardScale?.selectedProfile&&board.boardScale.selectedProfile!=='auto'?'; RamenRouter board scale v1: '+JSON.stringify({profile:board.boardScale.selectedProfile})+'\n':'');}
+  function boardMetadataWrite(board,nets=board.nets){return routingRulesWrite(nets)+(board.boardScale?.selectedProfile&&board.boardScale.selectedProfile!=='auto'?'; RamenRouter board scale v1: '+JSON.stringify({profile:board.boardScale.selectedProfile})+'\n':'')+(Number.isFinite(board.boardEdgeClearanceMm)?'; RamenRouter board edge clearance v1: '+JSON.stringify({clearanceMm:board.boardEdgeClearanceMm})+'\n':'');}
   function astRead(text) {
     if (typeof text !== 'string' || !text.trim()) fail('This file is empty. Choose a DSN exported from your PCB editor.');
     if (text.length > 64 * 1024 * 1024) fail('This file is too large. Choose a DSN no larger than 64 MiB.');
@@ -196,7 +212,7 @@ function createRamenDSN() {
   }
   function parse(text, filename = 'board.dsn') {
     const ast = astRead(text);
-    const routingRules = routingRulesRead(text),scaleChoice=boardScaleRead(text);
+    const routingRules = routingRulesRead(text),scaleChoice=boardScaleRead(text),edgeChoice=boardEdgeClearanceRead(text);
     allowed(ast, ['parser','resolution','unit','structure','placement','library','network','wiring'], 'the design');
     const parser = first(ast, 'parser'), quote = first(parser, 'string_quote');
     if (quote && quote[1] !== '"') fail('This DSN needs standard double quotes around quoted names. Try exporting it again.');
@@ -216,7 +232,7 @@ function createRamenDSN() {
       name: ast[1] && ast[1] !== "''" ? ast[1] : filename, filename, originalText: text,
       units: { name: unitName, resolution: res ? positive(res[2], 'resolution') : 1000, mmPerUnit: scales[unitName] },
       layers: [], nets: [], pads: [], viaDefs: [], vias: [], traces: [], outlines: [], holes: [], keepouts: [],
-      viaAtSmd: false, warnings: [], grids: {}, _ast: ast, copperFills: []
+      viaAtSmd: false, warnings: [], grids: {}, _ast: ast, copperFills: [], ...(edgeChoice?{boardEdgeClearanceMm:edgeChoice.clearanceMm}:{})
     };
     for (const layer of children(structure, 'layer')) {
       allowed(layer, ['type','property'], 'layer ' + layer[1]);
@@ -815,7 +831,7 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.1']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.2']],library,network]];
     return astWrite(session)+'\n';
   }
   return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, setBoardScale, exportRoutedDsn };

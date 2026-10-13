@@ -620,3 +620,6 @@ dialog p{font-size:16px;line-height:1.65}
 
 .secondary-downloads>button.export-ready,.run-report-button.export-ready{padding:8px 11px;border:1px solid #a5d9ae;border-radius:5px;background:#253d31;color:#d8f5e4;box-shadow:0 0 0 2px #9bd3a72e;animation:action-attention 2.1s ease-in-out 4}
 @media(prefers-reduced-motion:reduce){.secondary-downloads>button.export-ready,.run-report-button.export-ready{animation:none!important;box-shadow:0 0 0 2px #a5d99940}}
+
+/* Routing copper-to-edge distance. */
+#routingOptionsPanel .board-edge-distance{display:flex;align-items:center;gap:18px;margin-top:12px;color:#c5d1d6;font-size:14px;flex-wrap:wrap}#routingOptionsPanel .board-edge-distance .number-unit{display:inline-block;position:relative;width:145px;max-width:100%}#routingOptionsPanel .board-edge-distance input{width:100%;height:43px;border:1px solid #41535b;background:#101b20;color:#e1e9e9;border-radius:5px;font-size:17px;padding:10px 38px 10px 11px}#routingOptionsPanel .board-edge-distance .number-unit>span{top:13px;right:10px}#routingOptionsPanel .board-edge-distance input:disabled{opacity:.45}
