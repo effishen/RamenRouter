@@ -30,7 +30,9 @@ You can also download a routed DSN, a check report and the job log.
 
 **Board scale**, below the filename, shows the board's width and height. Open it to check the via copper diameters too.
 
-Compare those sizes with your PCB editor. **Automatic** uses the file's units unless it clearly identifies a supported export scale. If you exported from **EasyEDA Standard** and the sizes look wrong, choose **EasyEDA Standard** and check them again. **DSN units** uses the sizes declared in the file.
+**Automatic** recognises EasyEDA Standard exports, including its older flattened layout, and uses the correct 10-mil coordinate scale. EasyEDA Pro and other CAD formats keep their declared units. This also gives physical rules such as the board-edge gap the correct size.
+
+Compare the displayed sizes with your PCB editor. You can still choose **EasyEDA Standard** manually, or use **DSN units** to keep the sizes declared in the file.
 
 Changing the scale updates the measurements and keeps your current routes. The coordinates sent back to your PCB editor stay the same. This choice applies only to the loaded board; a DSN saved from RamenRouter keeps it for next time.
 

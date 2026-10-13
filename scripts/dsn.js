@@ -84,6 +84,7 @@ function createRamenDSN() {
     // Only Standard's known legacy flattened layout uses 10-mil coordinates.
     if(/easyeda/i.test(host)&&/pro/i.test(host))return {profile:'declared',source:'file-units',reason:'Using the units declared by EasyEDA Pro.'};
     if(/^easyeda\s*(?:standard|std|\(standard\)|\(std\))$/i.test(host))return {profile:'easyeda-standard',source:'host-cad',reason:'EasyEDA Standard export: one coordinate unit is 10 mil.'};
+    if(host&&!/^easyeda$/i.test(host))return {profile:'declared',source:'file-units',reason:'Using the units declared in this file.'};
     const library=first(ast,'library'),images=children(library,'image'),components=children(first(ast,'placement'),'component'),layers=board.layers.map(layer=>layer.name);
     const expected=['1',...Array.from({length:Math.max(0,layers.length-2)},(_,i)=>String(21+i)),'2'];
     const image=images[0],pins=children(image,'pin'),places=children(components[0],'place'),padNames=children(library,'padstack').map(pad=>String(pad[1]));
@@ -93,17 +94,17 @@ function createRamenDSN() {
       pins.length>0&&pins.every(pin=>/^p\d+$/.test(String(pin[1]))&&/^\d+$/.test(String(pin[2])))&&
       padNames.length>0&&padNames.every(name=>/^p\d+$/.test(name)||/^via\d+$/.test(name))&&board.viaDefs.length>0&&board.viaDefs.every(def=>/^via\d+$/.test(def.name))&&
       board.nets.every(net=>net.pins.every(pin=>/^u1-\d+$/.test(String(pin))));
-    return legacy||/^easyeda$/i.test(host)?{profile:'easyeda-standard',source:'legacy-layout',reason:'This could be an EasyEDA Standard export. Check its board size before choosing that scale.'}:{profile:'declared',source:'file-units',reason:'Using the units declared in this file.'};
+    return legacy?{profile:'easyeda-standard',source:'legacy-layout',reason:'Recognised EasyEDA Standard export: one coordinate unit is 10 mil.'}:{profile:'declared',source:'file-units',reason:'Using the units declared in this file.'};
   }
   function applyBoardScale(board,selectedProfile='auto') {
     if(!scaleProfiles.has(selectedProfile))throw new Error('Choose Automatic, DSN units or EasyEDA Standard for this board.');
     if(selectedProfile==='easyeda-standard'&&board.units.name!=='mil')throw new Error('EasyEDA Standard scale needs a file declared in mil. Choose DSN units for this board.');
     const declaredMmPerUnit={mm:1,mil:.0254,inch:25.4,um:.001,cm:10}[board.units.name];
-    const detected=detectBoardScale(board._ast,board),autoProfile=detected.source==='legacy-layout'?'declared':detected.profile,profile=selectedProfile==='auto'?autoProfile:selectedProfile;
+    const detected=detectBoardScale(board._ast,board),autoProfile=detected.profile,profile=selectedProfile==='auto'?autoProfile:selectedProfile;
     const mmPerUnit=profile==='easyeda-standard'?.254:declaredMmPerUnit;
     board.units.mmPerUnit=mmPerUnit;
     board.boardScale={selectedProfile,detectedProfile:detected.profile,autoProfile,profile,effectiveProfile:profile,mmPerUnit,declaredMmPerUnit,canUseEasyedaStandard:board.units.name==='mil',
-      source:selectedProfile==='auto'?detected.source:'user-choice',reason:selectedProfile==='auto'?(detected.source==='legacy-layout'?'This looks like an EasyEDA Standard export. Choose that scale if the board size matches your editor.':detected.reason):profile==='easyeda-standard'?'Using EasyEDA Standard 10-mil coordinates for this board.':'Using the units declared in this file.',
+      source:selectedProfile==='auto'?detected.source:'user-choice',reason:selectedProfile==='auto'?detected.reason:profile==='easyeda-standard'?'Using EasyEDA Standard 10-mil coordinates for this board.':'Using the units declared in this file.',
       widthMm:(board.bounds.maxX-board.bounds.minX)*mmPerUnit,heightMm:(board.bounds.maxY-board.bounds.minY)*mmPerUnit,
       minViaDiameterMm:board.viaDefs.length?Math.min(...board.viaDefs.map(def=>def.diameter))*mmPerUnit:null,
       viaDiametersMm:board.viaDefs.map(def=>({name:def.name,diameterMm:def.diameter*mmPerUnit}))};
@@ -831,7 +832,7 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.2']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.3']],library,network]];
     return astWrite(session)+'\n';
   }
   return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, setBoardScale, exportRoutedDsn };
