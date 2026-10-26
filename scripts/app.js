@@ -292,7 +292,7 @@
     if ($('netLayersDialog').open && (job?.id !== netLayersData?.jobId || active)) { discardRoutingRuleDraft(); $('netLayersDialog').close(); }
     const layerSummary = job?.routingRuleSummary || job?.layerRuleSummary;
     const savedOptions = routingOptionsBeforeDialog || readRoutingOptions();
-    const optionSummary = `${number(savedOptions.maxPasses)} attempts · ${number(savedOptions.timeoutMinutes)} min${Number.isFinite(savedOptions.boardEdgeClearanceMm) ? ' · ' + number(savedOptions.boardEdgeClearanceMm, 4) + ' mm edge gap' : ''}${savedOptions.preferredDirections ? ' · alternating directions' : ''}${savedOptions.benchmarkMode ? ' · fixed-work benchmark' : ''}`;
+    const optionSummary = `${number(savedOptions.maxPasses)} attempts · ${number(savedOptions.timeoutMinutes)} min${Number.isFinite(savedOptions.boardEdgeClearanceMm) ? ' · ' + number(savedOptions.boardEdgeClearanceMm, 4) + ' mm edge gap' : ''}${savedOptions.reworkExistingRoutes ? ' · rework existing routes' : ''}${savedOptions.preferredDirections ? ' · alternating directions' : ''}${savedOptions.benchmarkMode ? ' · fixed-work benchmark' : ''}`;
     $('netLayersSummary').textContent = optionSummary + (layerSummary ? ` · ${number(layerSummary.restrictedNets)} nets with layer limits · ${number(layerSummary.shortRouteNets || 0)} prefer shorter routes` : '');
     const layerConflicts = layerSummary?.conflictingTraces || 0;
     $('netLayerConflict').hidden = !layerConflicts || active;
@@ -302,7 +302,7 @@
     $('boardEdgeClearanceMm').disabled = !available || active || !$('boardEdgeClearanceEnabled').checked;
     if (available && !active) {
       const fanoutOnly = $('fanout').checked && $('fanoutOnly').checked;
-      $('optimize').disabled = fanoutOnly; $('deepSearch').disabled = fanoutOnly;
+      $('optimize').disabled = fanoutOnly; $('deepSearch').disabled = fanoutOnly; $('reworkExistingRoutes').disabled = fanoutOnly;
       $('preferredDirections').disabled = fanoutOnly || (netLayersData?.layers.length ?? board?.layers?.length ?? 2) < 2;
     }
     $('fanoutOnlyRow').hidden = !$('fanout').checked;
@@ -873,7 +873,7 @@
     const hasJob = Boolean(job && job.state !== 'idle');
     const active = isActive();
     if (job?.settings && !['ready', 'inspecting', 'clearing', 'updating_rules', 'updating_scale'].includes(job.state) && !['clearing', 'updating_rules', 'updating_scale'].includes(previousJob?.state) && (firstState || job.id !== lastJobId)) {
-      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
+      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'reworkExistingRoutes', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof job.settings[key] === 'boolean') $(key).checked = job.settings[key];
       for (const key of ['maxPasses', 'timeoutMinutes']) if (typeof job.settings[key] === 'number') $(key).value = job.settings[key];
       writeBoardEdgeClearance(job.settings);
     }
@@ -1562,7 +1562,7 @@
   }
 
   function readRoutingOptions() {
-    return { deepSearch: $('deepSearch').checked, flexibleFinishing: $('flexibleFinishing').checked, boardEdgeClearanceMm: $('boardEdgeClearanceEnabled').checked ? Number($('boardEdgeClearanceMm').value) : null, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
+    return { deepSearch: $('deepSearch').checked, flexibleFinishing: $('flexibleFinishing').checked, reworkExistingRoutes: $('reworkExistingRoutes').checked, boardEdgeClearanceMm: $('boardEdgeClearanceEnabled').checked ? Number($('boardEdgeClearanceMm').value) : null, viaInPad: $('viaInPad').checked, fanout: $('fanout').checked, fanoutOnly: $('fanoutOnly').checked, optimize: $('optimize').checked, preferredDirections: $('preferredDirections').checked, benchmarkMode: $('benchmarkMode').checked, maxPasses: Number($('maxPasses').value), timeoutMinutes: Number($('timeoutMinutes').value) };
   }
 
   function writeBoardEdgeClearance(settings) {
@@ -1574,14 +1574,14 @@
   }
 
   function writeRoutingOptions(settings) {
-    for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
+    for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'reworkExistingRoutes', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
     for (const key of ['maxPasses', 'timeoutMinutes']) if (Number.isFinite(settings[key])) $(key).value = settings[key];
     writeBoardEdgeClearance(settings);
   }
 
   function getSettings() {
     const settings = readRoutingOptions(), fanoutOnly = settings.fanout && settings.fanoutOnly;
-    return { ...settings, fanoutOnly, deepSearch: settings.deepSearch && !fanoutOnly, optimize: settings.optimize && !fanoutOnly };
+    return { ...settings, fanoutOnly, deepSearch: settings.deepSearch && !fanoutOnly, reworkExistingRoutes: settings.reworkExistingRoutes && !fanoutOnly, optimize: settings.optimize && !fanoutOnly };
   }
 
   function saveSettings(settings = readRoutingOptions()) { try { localStorage.setItem('ramenrouter.browser.settings.v1', JSON.stringify(settings)); } catch {} }
@@ -1606,7 +1606,7 @@
   function restoreSettings() {
     try {
       const settings = JSON.parse(localStorage.getItem('ramenrouter.browser.settings.v1') || '{}');
-      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
+      for (const key of ['fanout', 'fanoutOnly', 'optimize', 'deepSearch', 'flexibleFinishing', 'reworkExistingRoutes', 'viaInPad', 'preferredDirections', 'benchmarkMode']) if (typeof settings[key] === 'boolean') $(key).checked = settings[key];
       if (Number.isInteger(settings.maxPasses) && settings.maxPasses >= 1 && settings.maxPasses <= 100) $('maxPasses').value = settings.maxPasses;
       if (Number.isInteger(settings.timeoutMinutes) && settings.timeoutMinutes >= 1 && settings.timeoutMinutes <= 1440) $('timeoutMinutes').value = settings.timeoutMinutes;
       writeBoardEdgeClearance(settings);

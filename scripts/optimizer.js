@@ -21,7 +21,7 @@ function createRamenOptimizer(geometry, yieldTask) {
     for(const component of connection.components)for(let index=0;index<component.groups.length;index++)for(const pad of component.groups[index].pads)membership.set(JSON.stringify([String(component.net),pad]),index);
     return required.every(group=>{let first;for(const pad of group.pads){const member=membership.get(JSON.stringify([group.net,pad]));if(member===undefined)return false;if(first===undefined)first=member;else if(member!==first)return false;}return true;});
   }
-  const protectedCopper=item=>item.fixed||item.protected||item.fanout||item.locked||item.preserve||['fix','fixed','protect','protected'].includes(item.type)||['fix','protect'].includes(item._dsnType);
+  const protectedCopper=item=>item.fixed||item.protected||item.fanout||item.locked||item.preserve||item.attachment||['fix','fixed','protect','protected'].includes(item.type)||['fix','fixed','protect','protected'].includes(item._dsnType);
   function copperIdentity(board,kind,index){const key={pad:'pads',trace:'traces',via:'vias',fill:'copperFills'}[kind];return JSON.stringify([kind,key&&board[key]?.[index]]);}
   function protectedMembers(board,group,options){
     const members=group.pads.map(id=>'pad:'+id);
@@ -54,9 +54,9 @@ function createRamenOptimizer(geometry, yieldTask) {
   // aggregate airwire count is insufficient: deleting an unrelated padless
   // island can hide a newly disconnected pair of pads.
   async function cleanup(input,options={},emit=()=>{},isCancelled=()=>false,reportWork=()=>{}){
-    const empty={board:input,changed:false,removedTraces:0,trimmedTraces:0,removedVias:0};
+    const empty={board:input,changed:false,removedTraces:0,trimmedTraces:0,removedVias:0,removedSegments:0};
     if(options.cleanupDangling===false||isCancelled())return empty;
-    let board=G.applyBoardEdgeClearance(clone(input),options.boardEdgeClearanceMm),removedTraces=0,trimmedTraces=0,removedVias=0,processed=0,lastYield=Date.now();
+    let board=G.applyBoardEdgeClearance(clone(input),options.boardEdgeClearanceMm),removedTraces=0,trimmedTraces=0,removedVias=0,removedSegments=0,processed=0,lastYield=Date.now();
     const measurement=yieldTask?.measurement;
     const connections=()=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     const initial=connections(),required=padPartitions(initial),nets=new Map(board.nets.map(net=>[String(net.id),net]));
@@ -77,12 +77,12 @@ function createRamenOptimizer(geometry, yieldTask) {
       return anchorGroups.every(group=>{let first;for(const key of group.keys){const member=membership.get(JSON.stringify([group.net,key]));if(member===undefined)return false;if(first===undefined)first=member;else if(member!==first)return false;}return true;});
     }
     const completeNets=new Set(initial.components.filter(component=>component.groups.filter(group=>group.pads.length).length<=1).map(component=>String(component.net)));
-    const total=2*(board.traces.length+board.vias.length);
+    let total=2*(board.traces.length+board.vias.length);
     async function pause(force=false){if(force||Date.now()-lastYield>=20){reportWork({kind:'cleanup',processed,total});await wait();lastYield=Date.now();}return isCancelled();}
-    function changedActivity(kind,item){emit({type:'activity',phase:'optimizing',message:"Removing copper that doesn't connect pads",activity:{stage:'refinement-cleanup',netId:item.net,traces:removedTraces,trimmed:trimmedTraces,vias:removedVias,visual:kind==='trace'?{kind:'trace',paths:[{layer:item.layer,points:item.points.map(point=>point.slice())}],label:'Unused trace being removed'}:{kind:'via',points:G.viaLayers(board,item).map(layer=>[item.x,item.y,layer]),label:'Unused via being removed'}}});}
+    function changedActivity(kind,item){emit({type:'activity',phase:'optimizing',message:"Removing copper that doesn't connect pads",activity:{stage:'refinement-cleanup',netId:item.net,traces:removedTraces,trimmed:trimmedTraces,vias:removedVias,segments:removedSegments,visual:kind==='trace'?{kind:'trace',paths:[{layer:item.layer,points:item.points.map(point=>point.slice())}],label:'Unused trace being removed'}:{kind:'via',points:G.viaLayers(board,item).map(layer=>[item.x,item.y,layer]),label:'Unused via being removed'}}});}
     async function removeIslands(){
       const traces=new Set(),vias=new Set();
-      for(const component of connections().components)for(const group of component.groups){if(group.pads.length||!group.items.length)continue;if(group.items.some(item=>item.kind==='fill'||anchors.has(itemObject(item))))continue;for(const item of group.items){const object=itemObject(item);if(object)(item.kind==='trace'?traces:vias).add(object);}}
+      for(const component of connections().components)for(const group of component.groups){if(!completeNets.has(String(component.net))||group.pads.length||!group.items.length)continue;if(group.items.some(item=>item.kind==='fill'||anchors.has(itemObject(item))))continue;for(const item of group.items){const object=itemObject(item);if(object)(item.kind==='trace'?traces:vias).add(object);}}
       if(!traces.size&&!vias.size)return;
       const oldTraces=board.traces,oldVias=board.vias;board.traces=oldTraces.filter(trace=>!traces.has(trace));board.vias=oldVias.filter(via=>!vias.has(via));
       if(!preserved(connections())){board.traces=oldTraces;board.vias=oldVias;return;}
@@ -118,13 +118,65 @@ function createRamenOptimizer(geometry, yieldTask) {
         if(await pause())break;
       }
     }
+    // A needed polyline may still contain a redundant branch or a detour that
+    // another same-net path has replaced. Test its existing segments separately
+    // without shortening any copper on a net that still needs a connection.
+    if((options.segmentCleanup===true||options.reworkExistingRoutes===true)&&!isCancelled()){
+      const sources=board.traces.slice(),pieces=new Map(),sourceOf=new Map();
+      for(const trace of sources){
+        if(protectedTraces.has(trace)||!completeNets.has(String(trace.net))||trace.points.length<3)continue;
+        const segments=trace.points.slice(1).map((point,index)=>({...trace,points:[trace.points[index].slice(),point.slice()]}));
+        pieces.set(trace,segments);for(let index=0;index<segments.length;index++)sourceOf.set(segments[index],{trace,index});
+      }
+      if(pieces.size){
+        board.traces=sources.flatMap(trace=>pieces.get(trace)||[trace]);
+        const splitConnection=connections();
+        if(!preserved(splitConnection)||splitConnection.unrouted>initial.unrouted){board.traces=sources;}
+        else{
+          const rawLimit=Number(options.segmentCleanupMaxCandidates),candidateLimit=Number.isFinite(rawLimit)?Math.max(1,Math.min(16384,Math.floor(rawLimit))):4096;
+          const rawTime=Number(options.segmentCleanupTimeMs),timeLimit=Number.isFinite(rawTime)?Math.max(20,Math.min(60000,rawTime)):15000,deadline=Date.now()+timeLimit;
+          const targets=initial.components.filter(component=>!completeNets.has(String(component.net))).flatMap(component=>component.groups.flatMap(group=>group.pads)).map(id=>board.pads.find(pad=>pad.id===id)).filter(Boolean);
+          const proximity=trace=>targets.length?Math.min(...trace.points.flatMap(point=>targets.map(pad=>Math.hypot(point[0]-pad.x,point[1]-pad.y)))):0;
+          const candidates=board.traces.filter(trace=>sourceOf.has(trace)).map((trace,index)=>({trace,index,distance:proximity(trace)})).sort((a,b)=>a.distance-b.distance||a.index-b.index);
+          total+=Math.min(candidateLimit,2*(candidates.length+board.vias.length));let checkedCandidates=0;
+          emit({type:'progress',phase:'optimizing',message:'Checking redundant route segments',activity:{stage:'refinement-segments',total:candidates.length}});await pause(true);
+          const canContinue=()=>!isCancelled()&&checkedCandidates<candidateLimit&&Date.now()<deadline;
+          for(let round=0;round<2&&canContinue();round++){
+            for(const {trace} of candidates){
+              if(!canContinue())break;const index=board.traces.indexOf(trace);if(index<0)continue;
+              checkedCandidates++;processed++;measurement?.count('refinementCandidates',1,trace.net);board.traces.splice(index,1);
+              const next=connections();if(next.unrouted<=initial.unrouted&&preserved(next)){removedSegments++;changedActivity('trace',trace);}else board.traces.splice(index,0,trace);
+              if(await pause())break;
+            }
+            // Segment removal can leave a transition redundant even when it was
+            // needed during the earlier whole-trace pass.
+            for(let index=board.vias.length-1;index>=0&&canContinue();index--){
+              const via=board.vias[index];if(protectedVias.has(via)||!completeNets.has(String(via.net)))continue;
+              checkedCandidates++;processed++;measurement?.count('refinementCandidates',1,via.net);board.vias.splice(index,1);
+              const next=connections();if(next.unrouted<=initial.unrouted&&preserved(next)){removedVias++;changedActivity('via',via);}else board.vias.splice(index,0,via);
+              if(await pause())break;
+            }
+          }
+          // Rejoin surviving consecutive segments. Untouched polylines keep
+          // their original representation, as do all protected routing items.
+          const surviving=new Set(board.traces),merged=[];
+          for(const trace of sources){
+            const segments=pieces.get(trace);if(!segments){if(surviving.has(trace))merged.push(trace);continue;}
+            if(segments.every(segment=>surviving.has(segment))){merged.push(trace);continue;}
+            let run=null;
+            for(const segment of segments){if(!surviving.has(segment)){run=null;continue;}if(run)run.points.push(segment.points[1].slice());else{run={...trace,points:segment.points.map(point=>point.slice())};merged.push(run);}}
+          }
+          board.traces=merged;
+        }
+      }
+    }
     if(!isCancelled())await removeIslands();
     const finish=measurement?.begin('checking');let checked;try{checked=G.validate(board);}finally{finish?.();}
     if(!preserved(connections())||checked.totalViolations>baseline.totalViolations||checked.clearanceViolations>baseline.clearanceViolations||checked.belowNominalWidthTraceCount>baseline.belowNominalWidthTraceCount||!noNewRuleViolations(input,baseline,board,checked))return empty;
-    const changed=!!(removedTraces||trimmedTraces||removedVias);
-    if(changed)emit({type:'progress',phase:'optimizing',message:'Cleanup: '+removedTraces+' unused traces removed, '+trimmedTraces+' trace ends trimmed, '+removedVias+' unused vias removed.',board});
+    const changed=!!(removedTraces||trimmedTraces||removedVias||removedSegments);
+    if(changed)emit({type:'progress',phase:'optimizing',message:'Cleanup: '+removedTraces+' unused traces removed, '+trimmedTraces+' trace ends trimmed, '+removedVias+' unused vias removed'+(removedSegments?', '+removedSegments+' redundant segments removed':'')+'.',board});
     emit({type:'activity',phase:'optimizing',activity:{stage:'refinement-cleanup',visual:null}});
-    return {board:changed?board:input,changed,removedTraces,trimmedTraces,removedVias};
+    return {board:changed?board:input,changed,removedTraces,trimmedTraces,removedVias,removedSegments};
   }
   async function optimize(input,options={},emit=()=>{},isCancelled=()=>false,reportWork=()=>{}){
     const measurement=yieldTask?.measurement,finishRefinement=measurement?.begin('refining');

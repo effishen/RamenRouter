@@ -718,7 +718,9 @@ function createRamenDSN() {
     for(const trace of board.traces){consider(trace.width);for(const p of trace.points){consider(p[0]);consider(p[1]);}}
     for(const via of board.vias){consider(via.x);consider(via.y);}
     for(const via of board.viaDefs)consider(via.diameter);
-    const desired=Math.ceil(Math.max(originalResolution,Math.min(1000000,originalResolution*100)));
+    // Keep sub-micron contacts and edge margins when native units are small.
+    // The 32-bit bound below still takes precedence for large board origins.
+    const desired=Math.ceil(Math.max(originalResolution,1000000));
     const allowedResolution=largest===0?limit:Math.min(limit,Math.floor(limit/largest));
     let resolution=Math.min(desired,allowedResolution);
     if(!Number.isSafeInteger(resolution)||resolution<1)throw new Error('This board’s coordinates are too large for SES. Check the board origin and scale in your PCB editor.');
@@ -773,14 +775,39 @@ function createRamenDSN() {
       const gap=(Math.hypot(dx,dy)-(Number(dimension(a.def.diameter))+Number(dimension(b.def.diameter)))/2)/resolution;
       return gap+spacingEps>=required;
     });
-    let precisionIncreases=0;
-    while(!spacingSafe()){
-      if(precisionIncreases>=6||resolution>=allowedResolution)throw new Error('SES export stopped because rounding would put separate vias too close together. Separate those vias a little or move the board closer to the origin in your PCB editor, then reload its DSN.');
+    // Check the actual serialized copper against the board outline as well.
+    // Merely raising the usual precision can still round an exact edge margin
+    // outward, especially on a diagonal boundary or a board with a large origin.
+    const geometryFactory=typeof globalThis.createRamenGeometry==='function'?globalThis.createRamenGeometry:typeof require==='function'&&typeof module!=='undefined'&&module.exports?require('./geometry.js').createRamenGeometry:null;
+    if(!geometryFactory)throw new Error('SES export needs the geometry checker. Reload RamenRouter and try again.');
+    const geometry=geometryFactory(),edges=geometry.boundaryEdges(board),edgeObjects=[];
+    let originalEdgeIssues=0;
+    const edgeTolerance=Number.EPSILON*Math.max(1,largest)*32;
+    const edgeSafe=(points,radius,clearance)=>{
+      const shape=points.length===1?{type:'circle',cx:points[0][0],cy:points[0][1],r:radius}:{type:'capsule',a:points[0],b:points[1],r:radius};
+      if(!geometry.shapeInsideBoard(shape,board,edges,0))return false;
+      if(points.length===1)return edges.every(([a,b])=>geometry.distancePointSegment(points[0][0],points[0][1],a,b)+edgeTolerance>=radius+clearance);
+      return edges.every(([a,b])=>geometry.distanceSegments(points[0],points[1],a,b)+edgeTolerance>=radius+clearance);
+    };
+    for(const trace of board.traces)for(let index=1;index<trace.points.length;index++){
+      const points=[trace.points[index-1],trace.points[index]],clearance=geometry.boardEdgeClearance(board,'trace');
+      if(edgeSafe(points,trace.width/2,clearance))edgeObjects.push({points,diameter:trace.width,clearance});else originalEdgeIssues++;
+    }
+    for(const {via,def} of vias){
+      const points=[[via.x,via.y]],clearance=geometry.boardEdgeClearance(board,'via');
+      if(edgeSafe(points,def.diameter/2,clearance))edgeObjects.push({points,diameter:def.diameter,clearance});else originalEdgeIssues++;
+    }
+    const routingEdgeSafe=()=>edgeObjects.every(item=>edgeSafe(item.points.map(p=>p.map(value=>Number(position(value))/resolution)),Number(dimension(item.diameter))/resolution/2,item.clearance));
+    let precisionIncreases=0,edgePrecisionIncreases=0,spacingPrecisionIncreases=0;
+    while(!spacingSafe()||!routingEdgeSafe()){
+      const edgeFailed=!routingEdgeSafe();if(edgeFailed)edgePrecisionIncreases++;if(!spacingSafe())spacingPrecisionIncreases++;
+      if(precisionIncreases>=6||resolution>=allowedResolution)throw new Error(edgeFailed?'SES export stopped because rounding would put routing too close to the board edge. Move those routes slightly inward or move the board closer to the origin in your PCB editor, then reload its DSN.':'SES export stopped because rounding would put separate vias too close together. Separate those vias a little or move the board closer to the origin in your PCB editor, then reload its DSN.');
       resolution=Math.min(allowedResolution,precisionIncreases===5?allowedResolution:resolution*10);precisionIncreases++;
     }
     const report={
       originalResolution,resolution,unit:board.units.name,
-      viaSpacingPairsChecked:pairs.length,originalViaSpacingIssues:inputSpacingIssues,viaSpacingPrecisionIncreases:precisionIncreases,
+      viaSpacingPairsChecked:pairs.length,originalViaSpacingIssues:inputSpacingIssues,viaSpacingPrecisionIncreases:spacingPrecisionIncreases,
+      routingEdgeObjectsChecked:edgeObjects.length,originalRoutingEdgeIssues:originalEdgeIssues,routingEdgePrecisionIncreases:edgePrecisionIncreases,
       coordinateRounding:'nearest',copperDimensionRounding:'outward ceiling (floating-point noise tolerated)',
       coarserThanInput:resolution<originalResolution,
       maximumCoordinateErrorNative:0,maximumWidthIncreaseNative:0,maximumViaDiameterIncreaseNative:0,
@@ -832,7 +859,7 @@ function createRamenDSN() {
       if(node.length>2)network.push(node);
     }
     const sessionName=/\.dsn$/i.test(filename)?filename.replace(/\.dsn$/i,'.ses'):filename+'.ses';
-    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.3']],library,network]];
+    const session=['session',sessionName,['base_design',filename],['placement',['resolution',board.units.name,String(resolution)]],['routes',['resolution',board.units.name,String(resolution)],['parser',['host_cad','RamenRouter JavaScript'],['host_version','0.4.4']],library,network]];
     return astWrite(session)+'\n';
   }
   return { parse, exportSes, exportDsn, exportSesReport, clearRoutingDsn, setNetRoutingRules, setNetRoutingLayers, setBoardScale, exportRoutedDsn };

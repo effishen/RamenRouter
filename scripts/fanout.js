@@ -21,6 +21,9 @@ function createRamenFanout(geometry, yieldTask) {
     const connectivity=board=>{const finish=measurement?.begin('checking');try{return G.connectivity(board,{airwires:false});}finally{finish?.();}};
     try{
     const clock=typeof yieldTask?.now==='function'?yieldTask.now:Date.now;
+    const profile=options.fanoutProfile??0;
+    if(!Number.isInteger(profile)||profile<0||profile>2)throw new Error('The selected pad escape pattern is not available.');
+    const rowMultipliers=profile===1?[4,5,6,3,8,10,12]:[3,4,5,6,8,10,12];
     const board=G.applyBoardEdgeClearance(copy(input),options.boardEdgeClearanceMm),log=[],started=clock(),deadline=yieldTask?.managesBudget?Infinity:started+(options.timeoutMinutes||30)*60000;
     if(typeof options.viaInPad==='boolean'){board.viaAtSmd=options.viaInPad;board.viaInPadApplied=options.viaInPad;board.viaInPadOverride=options.viaInPad;for(const def of board.viaDefs)def.attachAllowed=options.viaInPad;}
     const cancelled=()=>isCancelled()||clock()>deadline;
@@ -126,19 +129,24 @@ function createRamenFanout(geometry, yieldTask) {
       spatial("Checking a crowded pad row "+rowIndex+'/'+rows.length,{stage:'fanout-row',processed:rowIndex,total:rows.length},()=>({kind:'pad',points:row.entries.slice(0,64).map(e=>[e.pad.x,e.pad.y,e.shape.layer]),label:'Current dense pad row'}));
       const entries=row.entries.filter(e=>!attached.has(e.pad.id));if(entries.length<2)continue;
       const width=Math.max(...entries.map(e=>e.net.width)),normalHalf=Math.max(...entries.map(e=>e.geometry.longSpan/2));
-      const pitch=Math.max(...entries.map(e=>defs.get(e.net.viaName).diameter+clearance(e.net.id)))+Math.max(.02,width*.025);
+      // Different checked breakout patterns give a later routing attempt
+      // another topology without changing pad positions or copper rules.
+      // Staggered rows need room for traces to pass the nearer row of vias.
+      const pitch=profile===2
+        ?Math.max(...entries.slice(1).map((entry,index)=>entry.t-entries[index].t),...entries.map(e=>defs.get(e.net.viaName).diameter/2+e.net.width/2+clearance(e.net.id)))+width*.1
+        :Math.max(...entries.map(e=>defs.get(e.net.viaName).diameter+clearance(e.net.id)))+Math.max(.02,width*.025);
       const centerT=(entries[0].t+entries[entries.length-1].t)/2,centerN=entries.reduce((s,e)=>s+e.n,0)/entries.length;
       let best=null;const choices=entries.map(()=>[]);
       for(const sign of [1,-1]){
         const normal=row.axis.map(v=>v*sign);
-        for(const multiplier of [3,4,5,6,8,10,12]){
+        for(const multiplier of rowMultipliers){
           if(cancelled())break;
           const offset=Math.max(normalHalf+width,multiplier*width),shoulder=normalHalf+width*.55;
-          for(const shift of [0,-width*.5,width*.5]){
+          for(const shift of profile===1?[width*.5,-width*.5,0]:[0,-width*.5,width*.5]){
             const bundle={traces:[],vias:[],pads:[]},temporary=[];
             for(let i=0;i<entries.length;i++){
-              const entry=entries[i],t=centerT+(i-(entries.length-1)/2)*pitch+shift;
-              const end=[row.axis[0]*(centerN+sign*offset)+row.tangent[0]*t,row.axis[1]*(centerN+sign*offset)+row.tangent[1]*t];
+              const entry=entries[i],t=centerT+(i-(entries.length-1)/2)*pitch+shift,normalOffset=offset+(profile===2?i%2*width*2:0);
+              const end=[row.axis[0]*(centerN+sign*normalOffset)+row.tangent[0]*t,row.axis[1]*(centerN+sign*normalOffset)+row.tangent[1]*t];
               const candidate=bundleFor(entry,end,normal,Math.min(shoulder,offset));
               if(candidate&&legalBundle(candidate))choices[i].push(candidate);if(candidate&&legalBundle(candidate,temporary)){bundle.traces.push(...candidate.traces);bundle.vias.push(...candidate.vias);bundle.pads.push(...candidate.pads);temporary.push(...itemPrimitives(candidate));}
             }

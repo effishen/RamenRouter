@@ -13,7 +13,7 @@
   let job = null, worker = null, workerUrl = null, inputText = null;
   let board = null, preview = null, exports = null, bestChecked = null, clearTransaction = null, ruleTransaction = null, scaleTransaction = null, importedNetRules = null, serial = 0, timer = null, watchdog = null;
   const logs = [];
-  const base = {appVersion:'0.4.3',engineVersion:'Ramen JS 0.4.3',fanoutVersion:'Ramen SMD escape'};
+  const base = {appVersion:'0.4.4',engineVersion:'Ramen JS 0.4.4',fanoutVersion:'Ramen SMD escape'};
   function notifyActivity() {
     const update={jobId:job?.id,state:job?.state,phase:job?.phase,activity:job?.activity,lastEngineUpdateAt:job?.lastEngineUpdateAt,operation:job?.operation,counters:job?.counters,deadlineAt:job?.deadlineAt,remainingSeconds:remaining(),startedAt:job?.startedAt,endedAt:job?.endedAt,pausedAt:job?.pausedAt,pausedDurationMs:job?.pausedDurationMs,budgetGeneration:job?.budgetGeneration};
     for(const fn of activitySubscribers){try{fn(update);}catch(_){}}
@@ -148,17 +148,17 @@
     if(!routingOperations.has(job.operation))watchdog=setTimeout(()=>{if(id===serial&&job&&active.has(job.state))stopWithBest('timed_out',"This step ran past its time limit and was stopped.");},timeLimit+30000);
   }
   function getSettings(value={}) {
-    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,boardEdgeClearanceMm:null,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
-    // Layer-access-only preparation is derived by the router, never an external setting.
-    delete s.layerAccessOnly;
-    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','flexibleFinishing','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
+    const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,reworkExistingRoutes:false,boardEdgeClearanceMm:null,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
+    // Preparation strategies are chosen by the router, never external settings.
+    delete s.layerAccessOnly;delete s.fanoutProfile;
+    for(const k of ['fanout','fanoutOnly','optimize','deepSearch','flexibleFinishing','reworkExistingRoutes','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
     for(const [k,min,max] of [['maxPasses',1,100],['timeoutMinutes',1,1440]]) {
       if(!Number.isFinite(s[k])||!Number.isInteger(s[k])||s[k]<min||s[k]>max) throw new Error(k+" needs a whole number between "+min+' and '+max+'.');
     }
     if(s.quality!=='balanced')throw new Error("This routing quality setting isn’t supported.");
     if(s.boardEdgeClearanceMm!==null&&(!Number.isFinite(s.boardEdgeClearanceMm)||s.boardEdgeClearanceMm<0||s.boardEdgeClearanceMm>1000))throw new Error('Board-edge clearance needs a number between 0 and 1000 mm, or use the file\'s rule.');
     for(const key of ['gridStep','viaCost'])if(s[key]!==undefined&&(!Number.isFinite(s[key])||s[key]<=0))throw new Error(key+" needs a number greater than zero.");
-    if(s.fanoutOnly) s.fanout=true;
+    if(s.fanoutOnly){s.fanout=true;s.reworkExistingRoutes=false;}
     return s;
   }
   function workerMain() {
@@ -291,7 +291,7 @@
       stage('exporting',"Preparing the checked board and its downloads.",{},writeLog);
       await yieldTask();
       return measured('exporting',()=>({board:result,preview:geometry(result,connection),stats:finalStats,advice,fromInput,
-        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.4.3',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name),boardEdgeClearanceMm:geo.boardEdgeClearance(result)*result.units.mmPerUnit},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
+        exports:{ses:dsn.exportSes(result,name),dsn:typeof dsn.exportRoutedDsn==='function'?dsn.exportRoutedDsn(result,name):dsn.exportDsn(result,name),report:JSON.stringify({engine:'Ramen JS 0.4.4',settings:options,routingRules:{shorterNets:result.nets.filter(net=>net.preferShort).map(net=>net.name),boardEdgeClearanceMm:geo.boardEdgeClearance(result)*result.units.mmPerUnit},units:result.units,boardScale:result.boardScale,bounds:result.bounds,viaInPadApplied:!!result.viaInPadApplied,sesExport:dsn.exportSesReport(result),initialStats,stats:finalStats,checks:report,advice},null,2)}}));
     }
     self.onmessage=async event=>{
       const m=event.data;
@@ -308,8 +308,8 @@
       try {
         cancelled=false;deadline=Number.isFinite(m.deadlineAt)?m.deadlineAt:Date.now()+(m.options?.timeoutMinutes||30)*60000;
         const bestAction=m.type==='refine-best'||m.type==='flexible-finish';
-        managedBudget=m.type==='run'||bestAction;measurement=managedBudget?benchmark.createCollector({appVersion:'0.4.3',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
-        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,operation:m.type,settings:benchmark.cleanSettings(m.options),appVersion:'0.4.3',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
+        managedBudget=m.type==='run'||bestAction;measurement=managedBudget?benchmark.createCollector({appVersion:'0.4.4',settings:m.options,environment:m.environment}):null;yieldTask.measurement=measurement;lastMeasurementAt=-Infinity;budgetGeneration=m.budgetGeneration||0;pauseRequested=false;pausedAt=null;pausedDurationMs=0;
+        if(measurement){const end=measurement.begin('fingerprinting');const boardFingerprint=await benchmark.fingerprint(m.text),workloadFingerprint=await benchmark.fingerprint(JSON.stringify({boardFingerprint,operation:m.type,settings:benchmark.cleanSettings(m.options),appVersion:'0.4.4',protocol:m.options.benchmarkMode?'fixed-work-v1':'normal-v1'}));measurement.setFingerprints(boardFingerprint,workloadFingerprint);end();}
         if(bestAction)measurement?.markContinuation?.();
         stage('reading',"Reading your DSN and its routing rules.");
         await yieldTask();
@@ -431,7 +431,7 @@
     clearTransaction=clearing?saved:null;ruleTransaction=editingRules?saved:null;scaleTransaction=editingScale?saved:null;pendingRuleReuse=null;
     if(!transactional&&!bestAction) {exports=null;preview=null;board=null;bestChecked=null;}
     const id=++serial;
-    const source='"use strict";\n'+[createRamenBenchmark,createRamenRuleMemory,createRamenDSN,createRamenGeometry,createRamenOptimizer,createRamenFanout,...(typeof createRamenFlexibleFinisher==='function'?[createRamenFlexibleFinisher]:[]),createRamenRouter,createRamenAdvisor,workerMain].map(fn=>fn.toString()).join('\n')+'\nworkerMain();';
+    const source='"use strict";\n'+[createRamenBenchmark,createRamenRuleMemory,createRamenDSN,createRamenGeometry,createRamenOptimizer,createRamenFanout,...(typeof createRamenFlexibleFinisher==='function'?[createRamenFlexibleFinisher]:[]),...(typeof createRamenContactNormalizer==='function'?[createRamenContactNormalizer]:[]),createRamenRouter,createRamenAdvisor,workerMain].map(fn=>fn.toString()).join('\n')+'\nworkerMain();';
     job={id:String(id),name:job?.name||'board.dsn',state:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':type==='inspect'?'inspecting':'starting',phase:clearing?'clearing':editingRules?'updating_rules':editingScale?'updating_scale':'loading',startedAt:Date.now(),settings:options,stats:transactional?saved.job.stats:null,initialStats:null,error:null,clearError:null,ruleError:null,scaleError:null,boardScale:transactional?saved.board.boardScale:null,hasOutput:false,routingCleared,layerRulesChanged,layerRuleSummary,routingSummary:transactional?routingSummary(board):null,suggestions:{},advice:{items:[]},bestResult:{available:false},revision:0,pass:0};
     job.routingRulesChanged=layerRulesChanged;job.routingRuleSummary=layerRuleSummary;job.ruleMatchFingerprint=ruleMatchFingerprint;job.previousRulesProposal=null;
     job.operation=type;job.counters=null;job.runReport=null;
@@ -638,7 +638,7 @@
     }
     if(endpoint==='/api/run') {
       requireIdle();requireRuleDecision();if(!inputText)throw new Error('Load a board first.');const settings=getSettings(data||{});logs.length=0;
-      log(job?.routingCleared?"Starting routing from the cleared board. Keeping your trace widths.":"Starting routing. Keeping your imported copper and trace widths.");
+      log(job?.routingCleared?"Starting routing from the cleared board. Keeping your trace widths.":settings.reworkExistingRoutes?"Starting routing. Imported traces and vias can be rerouted; components, protected copper and trace widths stay fixed.":"Starting routing. Keeping your imported copper and trace widths.");
       if(settings.viaInPad)log("Vias in SMD pads are allowed for this run.");
       if(settings.benchmarkMode)log("Benchmark mode is on. Difficult pad rows try a fixed number of fanout options instead of stopping at a time cutoff.");
       if(settings.preferredDirections)log("Alternating directions are on: vertical on the first copper layer, then horizontal, and so on. Nets marked for shorter routes still prioritise length.");

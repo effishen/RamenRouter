@@ -14,6 +14,7 @@
   <script src="scripts/optimizer.js" defer></script>
   <script src="scripts/fanout.js" defer></script>
   <script src="scripts/flexible-finisher.js" defer></script>
+  <script src="scripts/contact-normalizer.js" defer></script>
   <script src="scripts/router.js" defer></script>
   <script src="scripts/advisor.js" defer></script>
   <script src="scripts/benchmark.js" defer></script>
@@ -28,7 +29,7 @@
       <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M5 20h30c-1 10-7 15-15 15S6 30 5 20Zm6 15h18M10 7v5h8v8m9-16v8h-4v8M4 15h13M25 15h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="10" cy="5" r="2" fill="currentColor"/><circle cx="27" cy="3" r="2" fill="currentColor"/></svg>
       <span>Ramen<span class="brand-light">Router</span><span class="brand-caption">MAKE IT FIT. MAKE IT WORK.</span></span>
     </div>
-    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.4.3</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
+    <div class="header-engine"><span class="tiny-label">LOCAL ROUTING</span><strong id="engineVersion">Ramen JS 0.4.4</strong><span class="engine-divider"></span><span class="header-tag">PORTABLE / OFFLINE</span></div>
     <div class="connection" id="connection"><span class="status-dot"></span><span id="connectionText">Getting ready to route</span></div>
     <button class="icon-button help-button" id="helpButton" title="About RamenRouter" aria-label="About RamenRouter">?</button>
   </header>
@@ -149,7 +150,7 @@
       <div class="secondary-downloads"><button id="downloadDsn" class="text-button" disabled>Routed DSN <span aria-hidden="true">↓</span></button><button id="downloadChecks" class="text-button" disabled>Check report <span aria-hidden="true">↓</span></button><button id="downloadLog" class="text-button" disabled>Routing log <span aria-hidden="true">↓</span></button></div>
       <button id="runReportButton" class="run-report-button" type="button" aria-haspopup="dialog" hidden>Run report <span aria-hidden="true">↗</span></button>
       <p class="export-note">Check the routes, clearances and connections in your PCB editor before ordering the board.</p>
-      <div class="inspector-foot">RamenRouter <span id="appVersion">0.4.3</span><span>Made to fit · GPL-3.0</span></div>
+      <div class="inspector-foot">RamenRouter <span id="appVersion">0.4.4</span><span>Made to fit · GPL-3.0</span></div>
       </div>
     </aside>
   </main>
@@ -196,6 +197,7 @@
         </div>
         <div class="setting-block optimize-setting"><label class="switch-row" for="optimize"><span><strong>Optimize after routing</strong></span><span class="switch"><input type="checkbox" id="optimize" name="optimize" checked><span class="switch-track"></span></span></label><p>Tidy up completed routes and try to use fewer vias.</p></div>
         <div class="setting-block deep-search-setting"><label class="switch-row" for="deepSearch"><span><strong>Smart search</strong></span><span class="switch"><input type="checkbox" id="deepSearch" name="deepSearch" checked><span class="switch-track"></span></span></label><p>Give tricky nets another go and try to untangle the last few connections. Keep the best checked result along the way.</p></div>
+        <div class="setting-block rework-existing-setting"><label class="switch-row" for="reworkExistingRoutes"><span><strong>Rework existing routes</strong></span><span class="switch"><input type="checkbox" id="reworkExistingRoutes" name="reworkExistingRoutes" aria-describedby="reworkExistingDescription"><span class="switch-track"></span></span></label><p id="reworkExistingDescription">Let the router change imported traces and vias to make room for the remaining connections. Components and protected copper stay in place. Keep the best checked result while trying other layouts.</p></div>
         <div class="setting-block flexible-finishing-setting"><label class="switch-row" for="flexibleFinishing"><span><strong>Flexible finishing</strong></span><span class="switch"><input type="checkbox" id="flexibleFinishing" name="flexibleFinishing"><span class="switch-track"></span></span></label><p>When four or fewer pad connections remain, try small bends and shifts in movable tracks to make room. Your components, fixed copper and routing rules stay in place. You can also try this on your current best result.</p></div>
         <div class="setting-block board-edge-setting">
           <label class="switch-row" for="boardEdgeClearanceEnabled"><span><strong>Avoid board edge</strong></span><span class="switch"><input type="checkbox" id="boardEdgeClearanceEnabled" name="boardEdgeClearanceEnabled"><span class="switch-track"></span></span></label>
