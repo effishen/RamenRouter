@@ -149,8 +149,8 @@
   }
   function getSettings(value={}) {
     const s={fanout:true,fanoutOnly:false,optimize:true,deepSearch:true,flexibleFinishing:false,reworkExistingRoutes:false,boardEdgeClearanceMm:null,viaInPad:false,preferredDirections:false,benchmarkMode:false,maxPasses:12,timeoutMinutes:30,quality:'balanced',...value,neckdown:false};
-    // Layer-access-only preparation is derived by the router, never an external setting.
-    delete s.layerAccessOnly;
+    // Preparation strategies are chosen by the router, never external settings.
+    delete s.layerAccessOnly;delete s.fanoutProfile;
     for(const k of ['fanout','fanoutOnly','optimize','deepSearch','flexibleFinishing','reworkExistingRoutes','viaInPad','preferredDirections','benchmarkMode']) if(typeof s[k]!=='boolean') throw new Error(k+" needs to be switched on or off.");
     for(const [k,min,max] of [['maxPasses',1,100],['timeoutMinutes',1,1440]]) {
       if(!Number.isFinite(s[k])||!Number.isInteger(s[k])||s[k]<min||s[k]>max) throw new Error(k+" needs a whole number between "+min+' and '+max+'.');

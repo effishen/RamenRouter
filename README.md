@@ -82,7 +82,9 @@ Load the partly routed **DSN**, then turn on **Routing rules → Routing options
 
 Keep **Smart search** on. The router can carry a checked trial layout forward even if moving a blocking route temporarily leaves more connections to repair. Your best checked result stays separate, so stopping or running out of time keeps that result available. Refinement also checks redundant segments inside completed routes; useful copper on unfinished nets is kept.
 
-For an already routed, tight board, leave **Ramen SMD escape** off, set **Avoid board edge** to your required gap, leave **Prefer alternating layer directions** off, and enable **Flexible finishing** for the last four connections. Keep **Optimize after routing** on to clean up redundant copper. Add time or attempts when prompted if you want it to keep searching. These options give it more ways to finish; they do not guarantee completion.
+For a tight board with several missing connections, enable **Ramen SMD escape** too. With **Rework existing routes** and **Smart search** on, the router can rebuild ordinary routing, learn which pads lost their way out, and keep space for their escapes in the next layout. It tries repairs after each group of up to 12 routing attempts. Attempts and time belong to the whole job, including these new layouts. Fixed or protected copper stays in place, and a rebuilt layout must preserve your original pad connections before it can replace your best result.
+
+Set **Avoid board edge** to your required gap, leave **Prefer alternating layer directions** off, and enable **Flexible finishing** for the last four connections. Keep **Optimize after routing** on to clean up redundant copper. Give difficult boards more than 12 attempts so the router can try another layout. Add time or attempts when prompted if you want it to keep searching. These options give it more ways to finish; they do not guarantee completion.
 
 ## Start over with an already routed board
 
