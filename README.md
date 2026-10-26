@@ -56,7 +56,7 @@ The activity line and log explain what RamenRouter is working on. **Live work** 
 
 In **Routing rules → Routing options**, turn on **Avoid board edge** and enter the **Minimum gap** in millimetres, for example **0.2 mm**. The gap is measured from the outside copper of each trace or via to the outline, including board cutouts. A 0.2 mm wide trace needs its centre at least 0.3 mm from the edge when the gap is 0.2 mm. Routing, pad escapes, refinement and flexible finishing use the same distance.
 
-Leave the option off to use the imported file's edge rule, or its general clearance when no separate edge rule is available. Component and pad positions stay as imported. Existing traces and vias are checked against your choice; violations are reported and the imported copper is retained. If needed, use **Clear routing & start over** before routing again.
+Leave the option off to use the imported file's edge rule, or its general clearance when no separate edge rule is available. Component and pad positions stay as imported. Existing traces and vias are checked against your choice; violations are reported. Turn on **Rework existing routes** to let ordinary imported routing change, or use **Clear routing & start over** if you want to remove all routing first.
 
 The choice is saved for your next run and recorded in routed DSN exports for reuse in RamenRouter. The SES contains the resulting routes; it does not transfer this setting into your PCB editor's rule setup.
 
@@ -68,13 +68,21 @@ When routing attempts run out, choose more attempts and **Add attempts** to keep
 
 You can also choose **Refine current best** to work on the result already shown. This cleans up unused copper, tries shorter paths and checks for redundant vias. It doesn't spend more full-board routing attempts. Useful escape traces on unfinished nets and fixed or protected copper are kept.
 
-For the last four missing connections, **Try flexible finishing** looks for paths with flexible bends and tries small moves of blocking traces. Unfixed imported traces can move too. It keeps component positions, trace widths and routing rules, checks that existing pad connections remain intact, and keeps only an improvement that passes its checks. It can make snake-like paths with bends beyond 45° and 90°; completing every board isn't guaranteed.
+For the last four missing connections, **Try flexible finishing** looks for paths with flexible bends and tries small moves of blocking traces. Turn on **Rework existing routes** to let imported routing change during a routing job. Choosing **Try flexible finishing** directly on the best result also permits ordinary imported traces to move. It keeps component positions, trace widths and routing rules, checks that existing pad connections remain intact, and keeps only an improvement that passes its checks. It can make snake-like paths with bends beyond 45° and 90°; completing every board isn't guaranteed.
 
 These choices are available from the budget prompt and the best-result controls. You can refine or try flexible finishing after stopping, too. Each action keeps the previous checked result available if you stop it or a trial fails.
 
 **Stop routing** keeps the best checked attempt available. Choose **View best result** to see the missing connections and placement advice, or **Keep stopped** to leave it alone. Looking at the result doesn't restart anything. The timer and counts stay where you stopped.
 
 If the board is complete, the export button gets a gentle highlight. If something needs attention, the app points you towards the relevant advice instead.
+
+## Finish a partly routed board
+
+Load the partly routed **DSN**, then turn on **Routing rules → Routing options → Rework existing routes**. Ordinary imported traces and vias can be rerouted to make room. Components, pads, fixed or protected copper, widths and clearance rules stay in place. Leave this off when you want the imported routing held fixed during the routing job.
+
+Keep **Smart search** on. The router can carry a checked trial layout forward even if moving a blocking route temporarily leaves more connections to repair. Your best checked result stays separate, so stopping or running out of time keeps that result available. Refinement also checks redundant segments inside completed routes; useful copper on unfinished nets is kept.
+
+For an already routed, tight board, leave **Ramen SMD escape** off, set **Avoid board edge** to your required gap, leave **Prefer alternating layer directions** off, and enable **Flexible finishing** for the last four connections. Keep **Optimize after routing** on to clean up redundant copper. Add time or attempts when prompted if you want it to keep searching. These options give it more ways to finish; they do not guarantee completion.
 
 ## Start over with an already routed board
 
@@ -89,6 +97,7 @@ Check the cleared board, then click **Start routing** when you're ready.
 Open **Routing rules → Routing options**. **Apply rules** saves your changes; **Cancel** discards them.
 
 - **Smart search** gives difficult connections more attention and tries focused repairs when only a few remain. More **Routing attempts** gives it more chances. It keeps the best checked result along the way.
+- **Rework existing routes** lets the main routing search change ordinary imported traces and vias. Fixed or protected copper and component positions stay put. It is off by default.
 - **Ramen SMD escape** prepares extra short connections from surface-mount pads to nearby vias before routing. Connections needed to reach a net's chosen main layers are tried automatically, even with this switch off.
 - **Optimize after routing** refines the routes and tries to reduce vias.
 - **Flexible finishing** adds an optional stage after refinement for the last four missing connections. Leave it off to use the ordinary routing stages; you can still try it from the best-result controls later.
